@@ -149,7 +149,7 @@ LD_FLAGS_CMDLINE = $(foreach opt,$(KBUILD_LDFLAGS) $(LDFLAGS_EXECSTACK),-Wl,$(op
 # scripts/link-vmlinux.sh links UML with "$(CC) $(CFLAGS_vmlinux)" rather than
 # with $(LD), so the compiler needs the target triple here too -- see the
 # USER_CFLAGS comment above for why KBUILD_CPPFLAGS does not reach this point.
-export CFLAGS_vmlinux := $(CLANG_FLAGS) $(LINK-y) $(LINK_WRAPS) $(LD_FLAGS_CMDLINE) $(CC_FLAGS_LTO)
+export CFLAGS_vmlinux := $(filter --target=%,$(CLANG_FLAGS)) $(LINK-y) $(LINK_WRAPS) $(LD_FLAGS_CMDLINE) $(CC_FLAGS_LTO)
 
 # When cleaning we don't include .config, so we don't include
 # TT or skas makefiles and don't clean skas_ptregs.h.

@@ -32,7 +32,7 @@ VDSO_LDFLAGS = -fPIC -shared -Wl,--hash-style=sysv -z noexecstack \
 # instead. Without it clang picks the build machine's linker emulation and fails
 # with "cannot represent machine `aarch64'".
 quiet_cmd_vdso = VDSO    $@
-      cmd_vdso = $(CC) -nostdlib -o $@ $(CLANG_FLAGS) \
+      cmd_vdso = $(CC) -nostdlib -o $@ $(filter --target=%,$(CLANG_FLAGS)) \
 		       $(CC_FLAGS_LTO) $(VDSO_LDFLAGS) \
 		       $(VDSO_LDFLAGS_$(filter %.lds,$(^F))) \
 		       -Wl,-T,$(filter %.lds,$^) $(filter %.o,$^)

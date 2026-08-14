@@ -28,7 +28,7 @@ $(obj)/stub_exe: $(obj)/stub_exe.dbg FORCE
 # machine's default linker and it fails with "file in wrong format" as soon as
 # the host and target architectures differ. Empty under gcc.
 quiet_cmd_stub_exe = STUB_EXE $@
-      cmd_stub_exe = $(CC) -nostdlib -o $@ $(CLANG_FLAGS) \
+      cmd_stub_exe = $(CC) -nostdlib -o $@ $(filter --target=%,$(CLANG_FLAGS)) \
 			   $(filter-out $(UM_GPROF_OPT) $(UM_GCOV_OPT),$(KBUILD_CFLAGS)) $(STUB_EXE_LDFLAGS) \
 			   $(filter %.o,$^)
 

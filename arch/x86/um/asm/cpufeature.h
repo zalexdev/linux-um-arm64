@@ -21,7 +21,7 @@ extern const char * const x86_power_flags[32];
 extern const char * const x86_bug_flags[NBUGINTS*32];
 
 #define test_cpu_cap(c, bit)						\
-	 test_bit(bit, (unsigned long *)((c)->x86_capability))
+	 test_bit(bit, (unsigned long *)((c)->arch.x86_capability))
 
 /*
  * There are 32 bits/features in each mask word.  The high bits
@@ -53,7 +53,7 @@ extern const char * const x86_bug_flags[NBUGINTS*32];
 
 #define boot_cpu_has(bit)	cpu_has(&boot_cpu_data, bit)
 
-#define set_cpu_cap(c, bit)	set_bit(bit, (unsigned long *)((c)->x86_capability))
+#define set_cpu_cap(c, bit)	set_bit(bit, (unsigned long *)((c)->arch.x86_capability))
 
 extern void setup_clear_cpu_cap(unsigned int bit);
 
@@ -108,7 +108,7 @@ static __always_inline bool _static_cpu_has(u16 bit)
 		 : : [feature]  "i" (bit),
 		     [always]   "i" (X86_FEATURE_ALWAYS),
 		     [bitnum]   "i" (1 << (bit & 7)),
-		     [cap_byte] "m" (((const char *)boot_cpu_data.x86_capability)[bit >> 3])
+		     [cap_byte] "m" (((const char *)boot_cpu_data.arch.x86_capability)[bit >> 3])
 		 : : t_yes, t_no);
 t_yes:
 	return true;
