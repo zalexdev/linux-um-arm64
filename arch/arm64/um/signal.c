@@ -48,6 +48,48 @@ struct frame_record {
 	u64 lr;
 };
 
+/*
+ * Move FP state between the guest's register file and a signal frame.
+ *
+ * These two structures order their fields differently and it is not a detail
+ * that can be papered over with one memcpy:
+ *
+ *   struct user_fpsimd_state (what regs->fp holds, i.e. the host's NT_PRFPREG
+ *                             layout):     { vregs[32], fpsr, fpcr }
+ *   struct fpsimd_context    (what goes in mcontext.__reserved[], i.e. the
+ *                             guest-visible signal ABI):
+ *                                          { head, fpsr, fpcr, vregs[32] }
+ *
+ * Copying vregs+fpsr+fpcr as one block from the start of one into the vregs of
+ * the other transfers the vector registers correctly and silently drops FPCR
+ * and FPSR -- which is invisible to anything that does not check the control
+ * registers after taking a signal, and shows up much later as a guest whose
+ * rounding mode or denormal handling resets at random.
+ */
+static void fpstate_to_sigctx(struct fpsimd_context *fp, struct pt_regs *regs)
+{
+	struct user_fpsimd_state *st = (struct user_fpsimd_state *)regs->regs.fp;
+
+	if (host_fp_size < sizeof(*st))
+		return;
+
+	memcpy(&fp->vregs, &st->vregs, sizeof(fp->vregs));
+	fp->fpsr = st->fpsr;
+	fp->fpcr = st->fpcr;
+}
+
+static void sigctx_to_fpstate(struct pt_regs *regs, const struct fpsimd_context *fp)
+{
+	struct user_fpsimd_state *st = (struct user_fpsimd_state *)regs->regs.fp;
+
+	if (host_fp_size < sizeof(*st))
+		return;
+
+	memcpy(&st->vregs, &fp->vregs, sizeof(fp->vregs));
+	st->fpsr = fp->fpsr;
+	st->fpcr = fp->fpcr;
+}
+
 static int copy_sc_from_user(struct pt_regs *regs,
 			     struct sigcontext __user *from)
 {
@@ -93,13 +135,7 @@ static int copy_sc_from_user(struct pt_regs *regs,
 			if (head.size < sizeof(fpsimd))
 				break;
 			memcpy(&fpsimd, &sc.__reserved[offset], sizeof(fpsimd));
-			if (host_fp_size >= sizeof(fpsimd.vregs) +
-					    sizeof(fpsimd.fpsr) +
-					    sizeof(fpsimd.fpcr))
-				memcpy(regs->regs.fp, &fpsimd.vregs,
-				       sizeof(fpsimd.vregs) +
-				       sizeof(fpsimd.fpsr) +
-				       sizeof(fpsimd.fpcr));
+			sigctx_to_fpstate(regs, &fpsimd);
 			break;
 		}
 		offset += head.size;
@@ -131,11 +167,7 @@ static int copy_sc_to_user(struct sigcontext __user *to, struct pt_regs *regs,
 	fpsimd = (struct fpsimd_context *)&sc.__reserved[0];
 	fpsimd->head.magic = FPSIMD_MAGIC;
 	fpsimd->head.size = sizeof(*fpsimd);
-	if (host_fp_size >= sizeof(fpsimd->vregs) + sizeof(fpsimd->fpsr) +
-			    sizeof(fpsimd->fpcr))
-		memcpy(&fpsimd->vregs, regs->regs.fp,
-		       sizeof(fpsimd->vregs) + sizeof(fpsimd->fpsr) +
-		       sizeof(fpsimd->fpcr));
+	fpstate_to_sigctx(fpsimd, regs);
 
 	/* Null terminator, so a parser knows where the chain ends. */
 	term = (struct _aarch64_ctx *)&sc.__reserved[sizeof(*fpsimd)];

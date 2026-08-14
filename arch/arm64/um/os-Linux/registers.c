@@ -219,9 +219,24 @@ const char *ptrace_reg_name(int idx)
 /*
  * Size the FP regset once, against a live stub process.
  *
- * NT_ARM_SVE is tried first: on a host with SVE the FPSIMD registers are the
- * bottom 128 bits of the Z registers, so saving only NT_PRFPREG would silently
- * drop guest state. NT_PRFPREG is the fallback and is always present.
+ * NT_PRFPREG only, deliberately. It yields struct user_fpsimd_state --
+ * { vregs[32], fpsr, fpcr } -- and every consumer of uml_pt_regs.fp in this
+ * port reads it as exactly that: the ptrace regset view in arch/arm64/um/ptrace.c,
+ * the signal frame marshalling in arch/arm64/um/signal.c, and the stub state
+ * copies in os-Linux/mcontext.c.
+ *
+ * NT_ARM_SVE is *not* used even where the host supports it. Its buffer begins
+ * with a struct user_sve_header and its register layout depends on the current
+ * vector length, so treating it as a user_fpsimd_state would misread every
+ * field. Supporting SVE properly means teaching all three of those places about
+ * the header and the VL, plus emitting an sve_context record in the guest's
+ * signal frame; until that exists, quietly selecting the SVE regset would be
+ * the same class of bug as the fpsr/fpcr mix-up this comment sits next to --
+ * correct-looking vector data with silently wrong control state.
+ *
+ * The consequence is that a UML/arm64 guest sees FPSIMD and not SVE, which is
+ * accurate: nothing in this port saves or restores Z or P registers, so the
+ * guest must not be told it has them.
  *
  * The buffer is deliberately oversized and the kernel reports back how much it
  * actually wrote, which is the same trick x86 uses for XSTATE.
@@ -238,13 +253,8 @@ int arch_init_registers(int pid)
 	if (buf == MAP_FAILED)
 		return -ENOMEM;
 
-	ptrace_fpregset = NT_ARM_SVE;
+	ptrace_fpregset = NT_PRFPREG;
 	ret = getregset(pid, ptrace_fpregset, buf, probe_len, &got);
-	if (ret) {
-		ptrace_fpregset = NT_PRFPREG;
-		got = 0;
-		ret = getregset(pid, ptrace_fpregset, buf, probe_len, &got);
-	}
 
 	munmap(buf, probe_len);
 
