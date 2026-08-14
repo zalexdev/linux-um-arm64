@@ -13,7 +13,6 @@
 
 #include <asm/types.h>
 #include <asm/page.h>
-#include <asm/segment.h>
 #include <sysdep/ptrace_user.h>
 
 struct thread_info {

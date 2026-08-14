@@ -30,10 +30,6 @@ ifneq ($(filter $(SUBARCH),x86 x86_64 i386),)
 	HEADER_ARCH := x86
 endif
 
-ifdef CONFIG_64BIT
-	KBUILD_CFLAGS += -mcmodel=large
-endif
-
 HOST_DIR := arch/$(HEADER_ARCH)
 
 include $(srctree)/$(ARCH_DIR)/Makefile-skas
@@ -66,7 +62,16 @@ KBUILD_RUSTFLAGS += -Crelocation-model=pie
 
 KBUILD_AFLAGS += $(ARCH_INCLUDE)
 
+# $(CLANG_FLAGS) carries --target=, which for UML selects the *host* ABI the
+# binary runs on. It normally reaches the compiler through KBUILD_CPPFLAGS, but
+# arch/um/scripts/Makefile.rules replaces c_flags wholesale for USER_OBJS, so
+# KBUILD_CPPFLAGS never gets there and host-side files would be built for the
+# build machine's architecture instead. x86 does not notice: for x86_64 the two
+# are the same, and i386 rides on the -m32 in KBUILD_CFLAGS. An arm64 subarch has
+# no -m flag to ride on, so the triple has to be propagated explicitly.
+# CLANG_FLAGS is empty under gcc, so this is a no-op there.
 USER_CFLAGS = $(patsubst $(KERNEL_DEFINES),,$(patsubst -I%,,$(KBUILD_CFLAGS))) \
+		$(CLANG_FLAGS) \
 		$(ARCH_INCLUDE) $(MODE_INCLUDE) $(filter -I%,$(CFLAGS)) \
 		-D_FILE_OFFSET_BITS=64 -idirafter $(srctree)/include \
 		-idirafter $(objtree)/include -D__KERNEL__ -D__UM_HOST__ \
@@ -141,7 +146,10 @@ endif
 LD_FLAGS_CMDLINE = $(foreach opt,$(KBUILD_LDFLAGS) $(LDFLAGS_EXECSTACK),-Wl,$(opt))
 
 # Used by link-vmlinux.sh which has special support for um link
-export CFLAGS_vmlinux := $(LINK-y) $(LINK_WRAPS) $(LD_FLAGS_CMDLINE) $(CC_FLAGS_LTO)
+# scripts/link-vmlinux.sh links UML with "$(CC) $(CFLAGS_vmlinux)" rather than
+# with $(LD), so the compiler needs the target triple here too -- see the
+# USER_CFLAGS comment above for why KBUILD_CPPFLAGS does not reach this point.
+export CFLAGS_vmlinux := $(CLANG_FLAGS) $(LINK-y) $(LINK_WRAPS) $(LD_FLAGS_CMDLINE) $(CC_FLAGS_LTO)
 
 # When cleaning we don't include .config, so we don't include
 # TT or skas makefiles and don't clean skas_ptregs.h.

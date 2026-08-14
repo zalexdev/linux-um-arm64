@@ -25,6 +25,12 @@ typedef Elf32_auxv_t elf_auxv_t;
 /* These are initialized very early in boot and never changed */
 char * elf_aux_platform;
 long elf_aux_hwcap;
+/*
+ * AT_HWCAP2 matters on arm64, where the feature space outgrew a single word
+ * long ago (AT_HWCAP2 carries SVE2, MTE, the crypto extensions and more). x86
+ * never populates it, so it simply stays zero there.
+ */
+long elf_aux_hwcap2;
 
 __init void scan_elf_aux( char **envp)
 {
@@ -36,6 +42,9 @@ __init void scan_elf_aux( char **envp)
 		switch ( auxv->a_type ) {
 			case AT_HWCAP:
 				elf_aux_hwcap = auxv->a_un.a_val;
+				break;
+			case AT_HWCAP2:
+				elf_aux_hwcap2 = auxv->a_un.a_val;
 				break;
 			case AT_PLATFORM:
                                 /* elf.h removed the pointer elements from

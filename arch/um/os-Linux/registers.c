@@ -21,9 +21,9 @@ int init_pid_registers(int pid)
 {
 	int err;
 
-	err = ptrace(PTRACE_GETREGS, pid, 0, exec_regs);
+	err = get_host_regs(pid, exec_regs);
 	if (err < 0)
-		return -errno;
+		return err;
 
 	err = arch_init_registers(pid);
 	if (err < 0)

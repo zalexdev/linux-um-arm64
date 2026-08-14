@@ -143,11 +143,25 @@ noinline static void real_init(void)
 			BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
 				 (offsetof(struct seccomp_data, instruction_pointer))),
 
-			/* [3] Mask out lower bits */
-			BPF_STMT(BPF_ALU | BPF_AND | BPF_K, 0xfffff000),
+			/*
+			 * [3] Mask out lower bits.
+			 *
+			 * This was 0xfffff000, i.e. a hardcoded 4K page. The
+			 * filter is checking whether the trapping instruction
+			 * pointer lies on the stub's code page, so the mask has
+			 * to be the *host's* page mask -- on a 16K-page host
+			 * (Android 15 and later) a 4K mask would compare
+			 * against the wrong page and reject legitimate stub
+			 * syscalls. BPF_K is 32-bit and so is seccomp_data's
+			 * view here, hence the cast.
+			 */
+			BPF_STMT(BPF_ALU | BPF_AND | BPF_K,
+				 (unsigned int)UM_KERN_PAGE_MASK),
 
 			/* [4] Jump to [6] if the lower bits are not on the expected page */
-			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (init_data.stub_start) & 0xfffff000, 1, 0),
+			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+				 (init_data.stub_start) & (unsigned int)UM_KERN_PAGE_MASK,
+				 1, 0),
 
 			/* [5] Trap call, allow */
 			BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
@@ -176,13 +190,19 @@ noinline static void real_init(void)
 				 4, 0),
 			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_munmap,
 				 3, 0),
-#ifdef __i386__
-			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_set_thread_area,
+			/*
+			 * The syscall the stub needs in order to reinstate
+			 * guest TLS, which is architecture-specific:
+			 * set_thread_area on i386, arch_prctl on x86-64, and
+			 * nothing at all on arm64, where TPIDR_EL0 is written
+			 * directly by the stub. STUB_SECCOMP_TLS_SYSCALL is -1
+			 * in that case, which no real syscall number can match,
+			 * so the slot is inert while every jump offset below
+			 * stays as it is.
+			 */
+			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
+				 (unsigned int)STUB_SECCOMP_TLS_SYSCALL,
 				 2, 0),
-#else
-			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_arch_prctl,
-				 2, 0),
-#endif
 			BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_rt_sigreturn,
 				 1, 0),
 

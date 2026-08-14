@@ -11,6 +11,8 @@
 #include <generated/asm-offsets.h>
 
 #define STUB_MMAP_NR __NR_mmap2
+/* Syscall the stub uses to restore guest TLS; see arch/um/kernel/skas/stub_exe.c */
+#define STUB_SECCOMP_TLS_SYSCALL __NR_set_thread_area
 #define MMAP_OFFSET(o) ((o) >> UM_KERN_PAGE_SHIFT)
 
 static __always_inline long stub_syscall0(long syscall)

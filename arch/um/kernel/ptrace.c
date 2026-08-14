@@ -7,7 +7,6 @@
 #include <linux/ptrace.h>
 #include <linux/sched.h>
 #include <linux/uaccess.h>
-#include <asm/ptrace-abi.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/syscalls.h>
@@ -91,6 +90,12 @@ long arch_ptrace(struct task_struct *child, long request,
 		break;
 	}
 #endif
+#ifdef PTRACE_GET_THREAD_AREA
+	/*
+	 * Thread-area requests exist only where TLS lives in a descriptor table.
+	 * arm64 keeps it in TPIDR_EL0, which the guest writes itself, so these
+	 * requests have no arm64 encoding at all.
+	 */
 	case PTRACE_GET_THREAD_AREA:
 		ret = ptrace_get_thread_area(child, addr, vp);
 		break;
@@ -98,6 +103,7 @@ long arch_ptrace(struct task_struct *child, long request,
 	case PTRACE_SET_THREAD_AREA:
 		ret = ptrace_set_thread_area(child, addr, vp);
 		break;
+#endif /* PTRACE_GET_THREAD_AREA */
 
 	default:
 		ret = ptrace_request(child, request, addr, data);

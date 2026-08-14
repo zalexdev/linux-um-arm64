@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Build glue for ARCH=um SUBARCH=arm64.
+#
+# Included by arch/um/Makefile as $(HOST_DIR)/Makefile.um. Everything here
+# describes the *host* ABI the UML binary is built against, because for UML the
+# "architecture" is an ordinary aarch64 userspace process.
+
+# Link address of the UML kernel binary. Guest processes live in separate host
+# address spaces under SKAS, so this only has to stay clear of the UML kernel's
+# own mappings of guest physical memory, which are placed above the binary.
+# 0x60000000 matches x86_64 UML and leaves the whole 48-bit VA space above it.
+START := 0x60000000
+
+ELF_ARCH	:= aarch64
+ELF_FORMAT	:= elf64-littleaarch64
+
+CHECKFLAGS	+= -D__aarch64__
+
+# Unlike x86 there is nothing to disable here: the aarch64 psABI has no
+# equivalent of x86's "compile the kernel without SSE" problem, because the
+# kernel side never touches the FP/SIMD registers that the guest owns, and
+# -mgeneral-regs-only would break the host-side code that legitimately does.
+
+LINK-$(CONFIG_LD_SCRIPT_DYN_RPATH) += -Wl,-rpath,/lib

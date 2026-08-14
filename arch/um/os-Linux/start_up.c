@@ -18,7 +18,6 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/resource.h>
-#include <asm/ldt.h>
 #include <asm/unistd.h>
 #include <init.h>
 #include <os.h>
@@ -390,31 +389,31 @@ static void __init check_coredump_limit(void)
 		os_info("%llu\n", (unsigned long long)lim.rlim_max);
 }
 
-void  __init get_host_cpu_features(
-		void (*flags_helper_func)(char *line),
-		void (*cache_helper_func)(char *line))
+/*
+ * Hand every line of the host's /proc/cpuinfo to the caller and let it decide
+ * what is interesting. The field names are architecture-specific -- x86 wants
+ * "flags" and "cache_alignment", arm64 wants "Features" and has no
+ * cache_alignment field at all -- so matching them here would bake one
+ * architecture's format into generic code. The callback returns non-zero when
+ * it has seen everything it needs, which keeps this from reading the whole file
+ * on a machine with a lot of cores.
+ */
+void  __init get_host_cpu_features(int (*line_helper_func)(char *line))
 {
 	FILE *cpuinfo;
 	char *line = NULL;
 	size_t len = 0;
-	int done_parsing = 0;
 
 	cpuinfo = fopen("/proc/cpuinfo", "r");
 	if (cpuinfo == NULL) {
 		os_info("Failed to get host CPU features\n");
 	} else {
 		while ((getline(&line, &len, cpuinfo)) != -1) {
-			if (strstr(line, "flags")) {
-				flags_helper_func(line);
-				done_parsing++;
-			}
-			if (strstr(line, "cache_alignment")) {
-				cache_helper_func(line);
-				done_parsing++;
-			}
+			int done = line_helper_func(line);
+
 			free(line);
 			line = NULL;
-			if (done_parsing > 1)
+			if (done)
 				break;
 		}
 		fclose(cpuinfo);

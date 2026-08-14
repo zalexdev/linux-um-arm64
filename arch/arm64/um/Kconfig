@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config UML_ARM64
+	def_bool y
+	select ARCH_SUPPORTS_ATOMIC_RMW
+	select ARCH_USE_QUEUED_RWLOCKS
+	select ARCH_USE_QUEUED_SPINLOCKS
+	select HAVE_EFFICIENT_UNALIGNED_ACCESS
+	select MODULES_USE_ELF_RELA
+
+config 64BIT
+	def_bool y
+
+# Defined, not selected: these are per-architecture symbols with no central
+# definition, exactly as arch/x86/um/Kconfig defines GENERIC_HWEIGHT.
+config GENERIC_HWEIGHT
+	def_bool y
+
+# arch/arm64/lib's checksum routines are kernel-only assembly written against
+# the EL1 uaccess model. The generic C implementations in lib/checksum.c are
+# correct and are not on any hot path for a guest whose network device is a
+# host socket.
+config GENERIC_CSUM
+	def_bool y
+
+# Deliberately *not* "config ARM64". Generic code tests CONFIG_ARM64 to mean
+# "running on real arm64 hardware at EL1" -- it gates things like the arm64
+# vDSO, MTE, pointer authentication and errata workarounds, none of which
+# exist for a UML guest, which is an ordinary userspace process. The subarch
+# advertises itself as UML_ARM64 instead, exactly as x86 UML would if it were
+# written today, and selects the individual capabilities it really has.

@@ -22,8 +22,13 @@ $(obj)/stub_exe: OBJCOPYFLAGS := -S
 $(obj)/stub_exe: $(obj)/stub_exe.dbg FORCE
 	$(call if_changed,objcopy)
 
+# $(CLANG_FLAGS) supplies --target=, which selects both the code generation and
+# the linker emulation. KBUILD_CFLAGS does not carry it (it lives in
+# KBUILD_CPPFLAGS), so without this clang links the stub with the build
+# machine's default linker and it fails with "file in wrong format" as soon as
+# the host and target architectures differ. Empty under gcc.
 quiet_cmd_stub_exe = STUB_EXE $@
-      cmd_stub_exe = $(CC) -nostdlib -o $@ \
+      cmd_stub_exe = $(CC) -nostdlib -o $@ $(CLANG_FLAGS) \
 			   $(filter-out $(UM_GPROF_OPT) $(UM_GCOV_OPT),$(KBUILD_CFLAGS)) $(STUB_EXE_LDFLAGS) \
 			   $(filter %.o,$^)
 

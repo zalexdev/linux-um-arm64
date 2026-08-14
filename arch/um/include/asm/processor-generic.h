@@ -15,7 +15,7 @@ struct task_struct;
 
 #include <linux/prefetch.h>
 
-#include <asm/cpufeatures.h>
+#include <asm/cpuinfo.h>
 
 struct mm_struct;
 
@@ -72,10 +72,13 @@ extern void start_thread(struct pt_regs *regs, unsigned long entry,
 struct cpuinfo_um {
 	unsigned long loops_per_jiffy;
 	int cache_alignment;
-	union {
-		__u32		x86_capability[NCAPINTS + NBUGINTS];
-		unsigned long	x86_capability_alignment;
-	};
+	/*
+	 * Whatever the subarch needs to describe the host CPU to the guest.
+	 * On x86 this is the mirrored CPUID feature bitmap; on arm64 it is the
+	 * host's AT_HWCAP/AT_HWCAP2. Keeping it opaque here is what lets
+	 * show_cpuinfo() below be architecture-neutral.
+	 */
+	struct arch_cpuinfo arch;
 };
 
 extern struct cpuinfo_um boot_cpu_data;

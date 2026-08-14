@@ -22,7 +22,6 @@
 #include <linux/smp-internal.h>
 
 #include <asm/processor.h>
-#include <asm/cpufeature.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/text-patching.h>
@@ -59,7 +58,7 @@ static void __init add_arg(char *arg)
 struct cpuinfo_um boot_cpu_data = {
 	.loops_per_jiffy	= 0,
 	.cache_alignment	= L1_CACHE_BYTES,
-	.x86_capability		= { 0 }
+	.arch			= { }
 };
 
 EXPORT_SYMBOL(boot_cpu_data);
@@ -83,12 +82,14 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	seq_printf(m, "model name\t: UML\n");
 	seq_printf(m, "mode\t\t: skas\n");
 	seq_printf(m, "host\t\t: %s\n", host_info);
-	seq_printf(m, "fpu\t\t: %s\n", str_yes_no(cpu_has(&boot_cpu_data, X86_FEATURE_FPU)));
-	seq_printf(m, "flags\t\t:");
-	for (i = 0; i < 32*NCAPINTS; i++)
-		if (cpu_has(&boot_cpu_data, i) && (x86_cap_flags[i] != NULL))
-			seq_printf(m, " %s", x86_cap_flags[i]);
-	seq_printf(m, "\n");
+	/*
+	 * Everything above is the same on every host; everything the host CPU
+	 * actually determines is the subarch's business. x86 prints an "fpu"
+	 * line and a CPUID-derived "flags" list, arm64 prints a hwcap-derived
+	 * "Features" list -- both matching what that architecture's real
+	 * /proc/cpuinfo looks like, which is what guest userspace parses.
+	 */
+	arch_show_cpuinfo(m);
 	seq_printf(m, "cache_alignment\t: %d\n", boot_cpu_data.cache_alignment);
 	seq_printf(m, "bogomips\t: %lu.%02lu\n",
 		   loops_per_jiffy/(500000/HZ),
@@ -264,15 +265,6 @@ unsigned long brk_start;
 
 #define MIN_VMALLOC (32 * 1024 * 1024)
 
-static void __init parse_host_cpu_flags(char *line)
-{
-	int i;
-	for (i = 0; i < 32*NCAPINTS; i++) {
-		if ((x86_cap_flags[i] != NULL) && strstr(line, x86_cap_flags[i]))
-			set_cpu_cap(&boot_cpu_data, i);
-	}
-}
-
 static void __init parse_cache_line(char *line)
 {
 	long res;
@@ -287,6 +279,27 @@ static void __init parse_cache_line(char *line)
 		else
 			boot_cpu_data.cache_alignment = L1_CACHE_BYTES;
 	}
+}
+
+/*
+ * Called for every line of the *host's* /proc/cpuinfo. Returns non-zero once
+ * there is nothing left worth reading, so a host with many cores is not walked
+ * in full.
+ */
+static int __init parse_host_cpu_line(char *line)
+{
+	/*
+	 * "cache_alignment" is an x86-only field. Probing for it on every host is
+	 * harmless: where it is absent the L1_CACHE_BYTES default in
+	 * boot_cpu_data stands, which is what UML used before this was parsed at
+	 * all.
+	 */
+	if (strstr(line, "cache_alignment")) {
+		parse_cache_line(line);
+		return 0;
+	}
+
+	return arch_parse_host_cpu_flags(line);
 }
 
 static unsigned long __init get_top_address(char **envp)
@@ -345,7 +358,7 @@ int __init linux_main(int argc, char **argv, char **envp)
 	/* OS sanity checks that need to happen before the kernel runs */
 	os_early_checks();
 
-	get_host_cpu_features(parse_host_cpu_flags, parse_cache_line);
+	get_host_cpu_features(parse_host_cpu_line);
 
 	brk_start = (unsigned long) sbrk(0);
 

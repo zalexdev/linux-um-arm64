@@ -53,7 +53,13 @@ else
 
 START := 0x60000000
 
-KBUILD_CFLAGS += -fno-builtin -m64 
+# Moved here from arch/um/Makefile, where it was applied to every CONFIG_64BIT
+# subarch. It is an x86-64 requirement, not a 64-bit one: aarch64's small code
+# model already spans +/-4GB, and clang rejects -mcmodel=large together with the
+# PIC that UML builds with.
+KBUILD_CFLAGS += -mcmodel=large
+
+KBUILD_CFLAGS += -fno-builtin -m64
 
 CHECKFLAGS  += -m64 -D__x86_64__
 KBUILD_AFLAGS += -m64

@@ -97,12 +97,12 @@ static inline long do_syscall_stub(struct mm_id *mm_idp)
 		proc_data->restart_wait = 1;
 		wait_stub_done_seccomp(mm_idp, 0, 1);
 	} else {
-		n = ptrace_setregs(pid, syscall_regs);
+		n = put_host_regs(pid, syscall_regs);
 		if (n < 0) {
 			printk(UM_KERN_ERR "Registers -\n");
 			for (i = 0; i < MAX_REG_NR; i++)
 				printk(UM_KERN_ERR "\t%d\t0x%lx\n", i, syscall_regs[i]);
-			panic("%s : PTRACE_SETREGS failed, errno = %d\n",
+			panic("%s : put_host_regs failed, errno = %d\n",
 			      __func__, -n);
 		}
 

@@ -23,6 +23,8 @@ struct faultinfo {
 
 #define FAULT_WRITE(fi) ((fi).error_code & 2)
 #define FAULT_ADDRESS(fi) ((fi).cr2)
+/* The architecture's own description of why the fault happened, for humans. */
+#define FAULT_ERROR_CODE(fi) ((fi).error_code)
 
 /* This is Page Fault */
 #define SEGV_IS_FIXABLE(fi)	((fi)->trap_no == 14)

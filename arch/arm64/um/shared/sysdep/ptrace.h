@@ -1,0 +1,75 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef __SYSDEP_ARM64_PTRACE_H
+#define __SYSDEP_ARM64_PTRACE_H
+
+#include <generated/user_constants.h>
+#include <sysdep/faultinfo.h>
+
+/*
+ * gp[] mirrors struct user_regs_struct (== struct user_pt_regs) for the first
+ * UM_FRAME_SIZE bytes, followed by two slots UML synthesises itself. Only the
+ * first UM_FRAME_SIZE bytes are ever handed to the host; see user-offsets.c.
+ */
+#define MAX_REG_OFFSET (UM_FRAME_SIZE)
+#define MAX_REG_NR (UM_MAX_REG_NR)
+
+#define REGS_X(r, n)	((r)[(n)])
+#define REGS_SP(r)	((r)[HOST_SP])
+#define REGS_IP(r)	((r)[HOST_PC])
+#define REGS_PSTATE(r)	((r)[HOST_PSTATE])
+#define REGS_ORIG_X0(r)	((r)[HOST_ORIG_X0])
+#define REGS_SYSCALL_NR(r) ((r)[HOST_SYSCALL_NR])
+#define REGS_TLS(r)	((r)[HOST_TLS])
+
+#define UPT_X(r, n)	REGS_X((r)->gp, n)
+#define UPT_SP(r)	REGS_SP((r)->gp)
+#define UPT_IP(r)	REGS_IP((r)->gp)
+#define UPT_PSTATE(r)	REGS_PSTATE((r)->gp)
+#define UPT_ORIG_X0(r)	REGS_ORIG_X0((r)->gp)
+#define UPT_TLS(r)	REGS_TLS((r)->gp)
+
+/* AAPCS64 syscall ABI: arguments in x0..x5, number in x8, result in x0. */
+#define UPT_SYSCALL_ARG1(r) UPT_X(r, HOST_X0)
+#define UPT_SYSCALL_ARG2(r) UPT_X(r, HOST_X1)
+#define UPT_SYSCALL_ARG3(r) UPT_X(r, HOST_X2)
+#define UPT_SYSCALL_ARG4(r) UPT_X(r, HOST_X3)
+#define UPT_SYSCALL_ARG5(r) UPT_X(r, HOST_X4)
+#define UPT_SYSCALL_ARG6(r) UPT_X(r, HOST_X5)
+
+/*
+ * A syscall is restarted by rewinding over the "svc #0" that issued it. arm64
+ * instructions are fixed 4-byte width, so this is exact; x86 subtracts 2 for
+ * its variable-length "syscall".
+ *
+ * x0 must be restored as well: by the time we decide to restart, the host has
+ * already replaced it with -ERESTARTSYS. x86 does not need this because there
+ * the syscall number and the return value share one register, so restoring the
+ * number restores the argument too.
+ */
+#define UPT_RESTART_SYSCALL(r)					\
+	do {							\
+		UPT_IP(r) -= 4;					\
+		UPT_X(r, HOST_X0) = UPT_ORIG_X0(r);		\
+	} while (0)
+
+extern unsigned long host_fp_size;
+
+struct uml_pt_regs {
+	unsigned long gp[MAX_REG_NR];
+	struct faultinfo faultinfo;
+	long syscall;
+	int is_user;
+
+	/* Dynamically sized FP registers (FPSIMD, or FPSIMD+SVE) */
+	unsigned long fp[];
+};
+
+#define EMPTY_UML_PT_REGS { }
+
+#define UPT_SYSCALL_NR(r) ((r)->syscall)
+#define UPT_FAULTINFO(r) (&(r)->faultinfo)
+#define UPT_IS_USER(r) ((r)->is_user)
+
+extern int arch_init_registers(int pid);
+
+#endif /* __SYSDEP_ARM64_PTRACE_H */

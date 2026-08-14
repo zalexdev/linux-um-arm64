@@ -13,6 +13,8 @@
 #include <asm/prctl.h>
 
 #define STUB_MMAP_NR __NR_mmap
+/* Syscall the stub uses to restore guest TLS; see arch/um/kernel/skas/stub_exe.c */
+#define STUB_SECCOMP_TLS_SYSCALL __NR_arch_prctl
 #define MMAP_OFFSET(o) (o)
 
 #define __syscall_clobber "r11","rcx","memory"

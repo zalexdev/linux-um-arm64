@@ -39,60 +39,12 @@ int is_skas_winch(int pid, int fd, void *data)
 	return pid == getpgrp();
 }
 
-static const char *ptrace_reg_name(int idx)
-{
-#define R(n) case HOST_##n: return #n
-
-	switch (idx) {
-#ifdef __x86_64__
-	R(BX);
-	R(CX);
-	R(DI);
-	R(SI);
-	R(DX);
-	R(BP);
-	R(AX);
-	R(R8);
-	R(R9);
-	R(R10);
-	R(R11);
-	R(R12);
-	R(R13);
-	R(R14);
-	R(R15);
-	R(ORIG_AX);
-	R(CS);
-	R(SS);
-	R(EFLAGS);
-#elif defined(__i386__)
-	R(IP);
-	R(SP);
-	R(EFLAGS);
-	R(AX);
-	R(BX);
-	R(CX);
-	R(DX);
-	R(SI);
-	R(DI);
-	R(BP);
-	R(CS);
-	R(SS);
-	R(DS);
-	R(FS);
-	R(ES);
-	R(GS);
-	R(ORIG_AX);
-#endif
-	}
-	return "";
-}
-
 static int ptrace_dump_regs(int pid)
 {
 	unsigned long regs[MAX_REG_NR];
 	int i;
 
-	if (ptrace(PTRACE_GETREGS, pid, 0, regs) < 0)
+	if (get_host_regs(pid, regs) < 0)
 		return -errno;
 
 	printk(UM_KERN_ERR "Stub registers -\n");
@@ -666,7 +618,7 @@ void userspace(struct uml_pt_regs *regs)
 			 * fail.  In this case, there is nothing to do but
 			 * just kill the process.
 			 */
-			if (ptrace(PTRACE_SETREGS, pid, 0, regs->gp)) {
+			if (put_host_regs(pid, regs->gp)) {
 				printk(UM_KERN_ERR "%s - ptrace set regs failed, errno = %d\n",
 				       __func__, errno);
 				fatal_sigsegv();
@@ -697,8 +649,8 @@ void userspace(struct uml_pt_regs *regs)
 			}
 
 			regs->is_user = 1;
-			if (ptrace(PTRACE_GETREGS, pid, 0, regs->gp)) {
-				printk(UM_KERN_ERR "%s - PTRACE_GETREGS failed, errno = %d\n",
+			if (get_host_regs(pid, regs->gp)) {
+				printk(UM_KERN_ERR "%s - get_host_regs failed, errno = %d\n",
 				       __func__, errno);
 				fatal_sigsegv();
 			}

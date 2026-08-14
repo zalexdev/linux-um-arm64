@@ -16,6 +16,7 @@ enum {
 #ifndef CONFIG_X86_32
 #define __FRAME_OFFSETS /* Needed to get the R* macros */
 #endif
+#include <asm/ptrace-abi.h>
 #include <asm/ptrace-generic.h>
 
 #define user_mode(r) UPT_IS_USER(&(r)->regs)

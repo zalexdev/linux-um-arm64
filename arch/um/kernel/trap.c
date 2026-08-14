@@ -251,7 +251,7 @@ static void show_segv_info(struct uml_pt_regs *regs)
 		task_pid_nr(tsk) > 1 ? KERN_INFO : KERN_EMERG,
 		tsk->comm, task_pid_nr(tsk), FAULT_ADDRESS(*fi),
 		(void *)UPT_IP(regs), (void *)UPT_SP(regs),
-		fi->error_code);
+		FAULT_ERROR_CODE(*fi));
 
 	print_vma_addr(KERN_CONT " in ", UPT_IP(regs));
 	printk(KERN_CONT "\n");
