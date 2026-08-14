@@ -87,11 +87,15 @@ struct task_struct;
 
 #define ELF_ET_DYN_BASE (2 * TASK_SIZE / 3)
 
-extern long elf_aux_hwcap;
-#define ELF_HWCAP (elf_aux_hwcap)
-
-extern long elf_aux_hwcap2;
-#define ELF_HWCAP2 (elf_aux_hwcap2)
+/*
+ * Sanitised in arch/arm64/um/cpuinfo.c: the guest is told only about features
+ * whose architectural state UML actually preserves. Deliberately not the host's
+ * raw AT_HWCAP -- see the allowlist there.
+ */
+extern unsigned long um_arm64_elf_hwcap;
+extern unsigned long um_arm64_elf_hwcap2;
+#define ELF_HWCAP (um_arm64_elf_hwcap)
+#define ELF_HWCAP2 (um_arm64_elf_hwcap2)
 
 extern char *elf_aux_platform;
 #define ELF_PLATFORM (elf_aux_platform ?: ELF_PLATFORM_FALLBACK)
