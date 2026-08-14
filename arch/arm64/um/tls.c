@@ -15,20 +15,6 @@ void clear_flushed_tls(struct task_struct *task)
 {
 }
 
-/*
- * Make sure @to's TPIDR_EL0 is what will be in the register when it runs.
- *
- * Guest threads sharing an mm share one stub process, so the TLS register has
- * to be reinstated on every switch between them -- it is not part of the GPR
- * set that gets restored wholesale. Recording it in the register shadow slot is
- * enough: the ptrace path writes NT_ARM_TLS from there in put_host_regs(), and
- * the seccomp path hands it to the stub in set_stub_state().
- */
-void arch_switch_tls(struct task_struct *to)
-{
-	to->thread.regs.regs.gp[HOST_TLS] = to->thread.arch.tp_value;
-}
-
 int arch_set_tls(struct task_struct *t, unsigned long tls)
 {
 	/*

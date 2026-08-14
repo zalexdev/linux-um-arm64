@@ -26,16 +26,24 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 	return ksys_mmap_pgoff(addr, len, prot, flags, fd, off >> PAGE_SHIFT);
 }
 
-/*
- * Install this task's TLS before it runs.
- *
- * On x86-64 this function is empty, because FS_BASE lives inside the ptrace
- * register set and is therefore restored along with everything else. arm64's
- * TPIDR_EL0 is a separate regset, so it has to be pushed across explicitly: the
- * value is copied into the stub's arch data and flagged, and the stub reinstates
- * it with a single "msr tpidr_el0" on resume (see stub_seccomp_restore_state()).
- */
 void arch_switch_to(struct task_struct *to)
 {
-	arch_switch_tls(to);
+	/*
+	 * Nothing to do, and it is important that nothing is done.
+	 *
+	 * arm64 userspace owns TPIDR_EL0 outright: the guest sets its own thread
+	 * pointer with "msr tpidr_el0, xN" and never asks the kernel. UML
+	 * captures whatever the guest put there in get_host_regs() (from
+	 * NT_ARM_TLS) or get_regs_from_mc(), stores it in the task's own
+	 * HOST_TLS register slot, and writes it back in put_host_regs(). Since
+	 * that slot is part of the per-task register file, switching tasks
+	 * already switches the TLS.
+	 *
+	 * Reinstating thread.arch.tp_value here instead would be actively wrong:
+	 * that field is only ever set by CLONE_SETTLS, so for a thread that set
+	 * its own TLS -- which is every normal thread -- it is zero, and copying
+	 * it over the live value wipes the guest's thread pointer on the first
+	 * context switch. musl notices immediately: __dls3 compares
+	 * __pthread_self() against TPIDR_EL0 and traps.
+	 */
 }

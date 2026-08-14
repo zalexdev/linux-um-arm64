@@ -99,6 +99,5 @@ static inline int ptrace_set_thread_area(struct task_struct *child, int idx,
 }
 
 extern void arch_switch_to(struct task_struct *to);
-extern void arch_switch_tls(struct task_struct *to);
 
 #endif /* __UM_ARM64_PTRACE_H */
