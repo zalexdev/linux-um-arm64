@@ -56,15 +56,32 @@
  * instructions are fixed 4-byte width, so this is exact; x86 subtracts 2 for
  * its variable-length "syscall".
  *
- * x0 must be restored as well: by the time we decide to restart, the host has
- * already replaced it with -ERESTARTSYS. x86 does not need this because there
- * the syscall number and the return value share one register, so restoring the
- * number restores the argument too.
+ * Two registers have to be put back, and both differ from x86:
+ *
+ *   x0  by the time we decide to restart, it holds -ERESTARTSYS rather than the
+ *       first argument. x86 does not need this because there the syscall number
+ *       and the return value share one register, so restoring the number
+ *       restores the argument too.
+ *
+ *   x8  because the guest is about to *re-execute* the svc, and it is x8 that
+ *       selects the syscall at that point -- not NT_ARM_SYSTEM_CALL, which only
+ *       redirects the syscall already in flight. Without this,
+ *       "PT_REGS_ORIG_SYSCALL(regs) = __NR_restart_syscall" in
+ *       arch/um/kernel/signal.c silently has no effect: the guest re-runs the
+ *       original syscall instead of restart_syscall, so a signal-interrupted
+ *       nanosleep restarts its full duration rather than its remainder. On x86
+ *       ORIG_SYSCALL is a register the kernel really does reload, so the same
+ *       code works there.
+ *
+ * The two call sites in arch/um/kernel/signal.c assign ORIG_SYSCALL before and
+ * after this macro respectively; taking the number from the slot rather than
+ * from a parameter is what makes both orderings come out right.
  */
-#define UPT_RESTART_SYSCALL(r)					\
-	do {							\
-		UPT_IP(r) -= 4;					\
-		UPT_X(r, HOST_X0) = UPT_ORIG_X0(r);		\
+#define UPT_RESTART_SYSCALL(r)						\
+	do {								\
+		UPT_IP(r) -= 4;						\
+		UPT_X(r, HOST_X0) = UPT_ORIG_X0(r);			\
+		UPT_X(r, HOST_X8) = REGS_SYSCALL_NR((r)->gp);		\
 	} while (0)
 
 extern unsigned long host_fp_size;

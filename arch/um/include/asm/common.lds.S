@@ -1,21 +1,30 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <asm-generic/vmlinux.lds.h>
 
+/*
+ * Section alignment below is (1 << CONFIG_PAGE_SHIFT), the *guest* page size,
+ * which for UML always equals the host's. These were literal 4096s, correct
+ * only on a 4K-page host. On a 16K-page host (Android 15 and later ship 16K) a
+ * 4096-byte alignment lets read-only and read-write data share a page, so
+ * CONFIG_STRICT_KERNEL_RWX either fails to mprotect or ends up granting write
+ * access to rodata.
+ */
+
   .fini      : { *(.fini)    } =0x9090
   _etext = .;
   PROVIDE (etext = .);
 
-  . = ALIGN(4096);
+  . = ALIGN((1 << CONFIG_PAGE_SHIFT));
   _sdata = .;
   PROVIDE (sdata = .);
 
-  RO_DATA(4096)
+  RO_DATA((1 << CONFIG_PAGE_SHIFT))
 
   .unprotected : { *(.unprotected) }
-  . = ALIGN(4096);
+  . = ALIGN((1 << CONFIG_PAGE_SHIFT));
   PROVIDE (_unprotected_end = .);
 
-  . = ALIGN(4096);
+  . = ALIGN((1 << CONFIG_PAGE_SHIFT));
   EXCEPTION_TABLE(0)
 
   BUG_TABLE
@@ -94,7 +103,7 @@
 	__fini_array_end = .;
   }
 
-   . = ALIGN(4096);
+   . = ALIGN((1 << CONFIG_PAGE_SHIFT));
   .init.ramfs : {
 	INIT_RAM_FS
   }

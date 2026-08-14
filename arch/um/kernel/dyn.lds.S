@@ -18,7 +18,7 @@ SECTIONS
   . = START + SIZEOF_HEADERS;
   .interp         : { *(.interp) }
   __binary_start = .;
-  . = ALIGN(4096);		/* Init code and data */
+  . = ALIGN((1 << CONFIG_PAGE_SHIFT));		/* Init code and data */
   _text = .;
   INIT_TEXT_SECTION(PAGE_SIZE)
 

@@ -34,7 +34,7 @@ void map_memory(unsigned long virt, unsigned long phys, unsigned long len,
 		if (err == -ENOMEM)
 			printk(KERN_ERR "try increasing the host's "
 			       "/proc/sys/vm/max_map_count to <physical "
-			       "memory size>/4096\n");
+			       "memory size>/%lu\n", PAGE_SIZE);
 		panic("map_memory(0x%lx, %d, 0x%llx, %ld, %d, %d, %d) failed, "
 		      "err = %d\n", virt, fd, offset, len, r, w, x, err);
 	}
