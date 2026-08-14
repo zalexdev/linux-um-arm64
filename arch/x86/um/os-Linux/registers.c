@@ -59,6 +59,26 @@ int put_host_regs(int pid, unsigned long *regs)
 	return 0;
 }
 
+long ptrace_get_syscall_nr(int pid)
+{
+	errno = 0;
+	return ptrace(PTRACE_PEEKUSER, pid, PT_SYSCALL_NR_OFFSET, 0);
+}
+
+int ptrace_set_syscall_nr(int pid, long nr)
+{
+	if (ptrace(PTRACE_POKEUSER, pid, PT_SYSCALL_NR_OFFSET, nr) < 0)
+		return -errno;
+	return 0;
+}
+
+int ptrace_set_syscall_ret(int pid, long val)
+{
+	if (ptrace(PTRACE_POKEUSER, pid, PT_SYSCALL_RET_OFFSET, val) < 0)
+		return -errno;
+	return 0;
+}
+
 const char *ptrace_reg_name(int idx)
 {
 #define R(n) case HOST_##n: return #n

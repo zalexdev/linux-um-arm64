@@ -147,6 +147,51 @@ int put_host_regs(int pid, unsigned long *regs)
 }
 
 
+/*
+ * The syscall number is a regset of its own on arm64. x8 holds it at entry, but
+ * writing x8 does not change which syscall runs -- the kernel latched the number
+ * before the ptrace stop -- so NT_ARM_SYSTEM_CALL is the only lever, and writing
+ * -1 through it is how a syscall is cancelled.
+ */
+long ptrace_get_syscall_nr(int pid)
+{
+	int scno = -1;
+	int err;
+
+	err = getregset(pid, NT_ARM_SYSTEM_CALL, &scno, sizeof(scno), NULL);
+	if (err) {
+		errno = -err;
+		return -1;
+	}
+	errno = 0;
+	return scno;
+}
+
+int ptrace_set_syscall_nr(int pid, long nr)
+{
+	int scno = (int)nr;
+
+	return setregset(pid, NT_ARM_SYSTEM_CALL, &scno, sizeof(scno));
+}
+
+int ptrace_set_syscall_ret(int pid, long val)
+{
+	unsigned long regs[MAX_REG_NR];
+	int err;
+
+	/*
+	 * The return value is just x0, but arm64 has no PTRACE_POKEUSER, so the
+	 * whole GPR set has to be read back, modified and rewritten.
+	 */
+	err = getregset(pid, NT_PRSTATUS, regs, UM_FRAME_SIZE, NULL);
+	if (err)
+		return err;
+
+	regs[HOST_X0] = (unsigned long)val;
+
+	return setregset(pid, NT_PRSTATUS, regs, UM_FRAME_SIZE);
+}
+
 const char *ptrace_reg_name(int idx)
 {
 	static const char * const xname[] = {

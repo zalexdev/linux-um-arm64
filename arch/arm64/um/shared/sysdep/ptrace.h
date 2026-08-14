@@ -28,8 +28,23 @@
 #define UPT_ORIG_X0(r)	REGS_ORIG_X0((r)->gp)
 #define UPT_TLS(r)	REGS_TLS((r)->gp)
 
-/* AAPCS64 syscall ABI: arguments in x0..x5, number in x8, result in x0. */
-#define UPT_SYSCALL_ARG1(r) UPT_X(r, HOST_X0)
+/*
+ * AAPCS64 syscall ABI: arguments in x0..x5, number in x8, result in x0.
+ *
+ * Argument 1 is read from the saved ORIG_X0 slot, not from the live x0.
+ *
+ * The syscall return value and the first syscall argument are the same register
+ * on arm64. handle_syscall() in arch/um/kernel/skas/syscall.c seeds the return
+ * value with -ENOSYS *before* it reads the arguments -- which is harmless on
+ * x86, where the return lands in RAX and argument 1 comes from RDI, but on arm64
+ * it would destroy argument 1 in every single syscall. (The symptom is that
+ * every guest syscall sees -38 as its first argument, so the very first
+ * open/write from init fails and userspace dies before printing anything.)
+ *
+ * get_host_regs() and get_regs_from_mc() both capture x0 into HOST_ORIG_X0 at
+ * the point the guest trapped, which is the value the ABI actually passed.
+ */
+#define UPT_SYSCALL_ARG1(r) UPT_ORIG_X0(r)
 #define UPT_SYSCALL_ARG2(r) UPT_X(r, HOST_X1)
 #define UPT_SYSCALL_ARG3(r) UPT_X(r, HOST_X2)
 #define UPT_SYSCALL_ARG4(r) UPT_X(r, HOST_X3)
