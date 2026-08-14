@@ -7,6 +7,26 @@ config UML_ARM64
 	select ARCH_USE_QUEUED_SPINLOCKS
 	select HAVE_EFFICIENT_UNALIGNED_ACCESS
 	select MODULES_USE_ELF_RELA
+	#
+	# The guest's syscall ABI must match what aarch64 userspace was built
+	# against, and that is decided here rather than by arch/arm64/Kconfig,
+	# which is not sourced for ARCH=um.
+	#
+	# CLONE_BACKWARDS makes sys_clone take
+	#	(flags, newsp, parent_tidptr, tls, child_tidptr)
+	# instead of the generic
+	#	(flags, newsp, parent_tidptr, child_tidptr, tls)
+	# i.e. it swaps the last two arguments. Every aarch64 libc passes them in
+	# the CLONE_BACKWARDS order, so without this a guest pthread_create()
+	# hands the kernel its child-tid pointer as the new thread's TPIDR_EL0 and
+	# its TLS pointer as the address to clear on exit: the thread starts with
+	# a garbage thread pointer and, on exit, writes a zero and a futex wake to
+	# whatever the TLS pointer happened to be.
+	#
+	# Nothing in gates 1-5 catches this, because fork() passes neither a tls
+	# value nor a child_tidptr -- it is threads, and therefore glibc, that
+	# make it visible.
+	select CLONE_BACKWARDS
 
 config 64BIT
 	def_bool y
