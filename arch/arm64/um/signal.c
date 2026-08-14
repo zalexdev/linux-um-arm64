@@ -90,6 +90,27 @@ static void sigctx_to_fpstate(struct pt_regs *regs, const struct fpsimd_context 
 	st->fpcr = fp->fpcr;
 }
 
+/*
+ * The vDSO's sigreturn trampoline (arch/arm64/um/vdso/sigreturn.S) describes
+ * where the interrupted registers live using CFI offsets it cannot compute --
+ * they are literals in a .S file. If the frame layout here ever moves, those
+ * literals become silently wrong, and the only symptom is that gdb and
+ * libunwind produce garbage backtraces out of signal handlers, which nothing
+ * else in the test suite would notice. Pin them.
+ */
+static void __always_unused um_sigframe_abi_check(void)
+{
+	BUILD_BUG_ON(sizeof(struct siginfo) != 128);
+	BUILD_BUG_ON(offsetof(struct rt_sigframe, info) != 0);
+	BUILD_BUG_ON(offsetof(struct rt_sigframe, uc) != 128);
+	BUILD_BUG_ON(offsetof(struct ucontext, uc_mcontext) != 176);
+	BUILD_BUG_ON(offsetof(struct sigcontext, regs) != 8);
+	/* SIGFRAME_REGS_OFF in sigreturn.S is the sum of the three above. */
+	BUILD_BUG_ON(128 + 176 + 8 != 312);
+	/* The frame_record must keep the stack 16-byte aligned. */
+	BUILD_BUG_ON(sizeof(struct frame_record) % 16 != 0);
+}
+
 static int copy_sc_from_user(struct pt_regs *regs,
 			     struct sigcontext __user *from)
 {
