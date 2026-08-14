@@ -661,6 +661,74 @@ void userspace(struct uml_pt_regs *regs)
 				fatal_sigsegv();
 			}
 
+#ifdef UM_SYSCALL_STOP_HIDES_REG
+			/*
+			 * One register is not visible at a syscall stop and
+			 * cannot be written there either -- see
+			 * UM_SYSCALL_STOP_HIDES_REG in <sysdep/ptrace_user.h>.
+			 * Everything else has just been read correctly, so step
+			 * off the stop and pick up that one register alone.
+			 *
+			 * The step runs no guest code: the syscall stays
+			 * emulated away and the program counter does not move.
+			 * It is still not a free stop to stand on -- it arrives
+			 * as a forced SIGTRAP, so the host's signal path runs
+			 * and clears the recorded syscall number, and would
+			 * rewind the program counter if the first syscall
+			 * argument happened to look like -ERESTARTSYS. Taking
+			 * only the hidden register from here, and everything
+			 * else from the syscall stop above, is immune to both:
+			 * whatever the host did to the rest is overwritten by
+			 * the register write that resumes this task.
+			 *
+			 * The other half of the reason to step is the write: the
+			 * task is left parked on a stop where the full register
+			 * set can be installed, which is what a guest thread
+			 * switch needs and what a syscall stop silently refuses.
+			 */
+			if (WIFSTOPPED(status) &&
+			    WSTOPSIG(status) == (SIGTRAP | 0x80)) {
+				unsigned long hidden[MAX_REG_NR];
+				int sstatus;
+
+				if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0)) {
+					printk(UM_KERN_ERR "%s - failed to step off a syscall stop, errno = %d\n",
+					       __func__, errno);
+					fatal_sigsegv();
+				}
+
+				CATCH_EINTR(err = waitpid(pid, &sstatus,
+							  WUNTRACED | __WALL));
+				if (err < 0) {
+					printk(UM_KERN_ERR "%s - wait after step failed, errno = %d\n",
+					       __func__, errno);
+					fatal_sigsegv();
+				}
+
+				/*
+				 * Anything else means the assumption above no
+				 * longer holds. Fail loudly rather than run a
+				 * guest on registers that are quietly wrong.
+				 */
+				if (!WIFSTOPPED(sstatus) ||
+				    WSTOPSIG(sstatus) != SIGTRAP) {
+					printk(UM_KERN_ERR "%s - unexpected status 0x%x stepping off a syscall stop\n",
+					       __func__, sstatus);
+					fatal_sigsegv();
+				}
+
+				if (get_host_regs(pid, hidden)) {
+					printk(UM_KERN_ERR "%s - get_host_regs after step failed, errno = %d\n",
+					       __func__, errno);
+					fatal_sigsegv();
+				}
+
+				regs->gp[UM_SYSCALL_STOP_HIDDEN_REG] =
+					hidden[UM_SYSCALL_STOP_HIDDEN_REG];
+			}
+#endif
+
+
 			if (WIFSTOPPED(status)) {
 				sig = WSTOPSIG(status);
 
@@ -745,8 +813,12 @@ void userspace(struct uml_pt_regs *regs)
 void new_thread(void *stack, jmp_buf *buf, void (*handler)(void))
 {
 	(*buf)[0].JB_IP = (unsigned long) handler;
+	/*
+	 * How much to leave below the top of the stack is an ABI question, not a
+	 * universal one: see ARCH_INIT_SP_RESERVE in <sysdep/archsetjmp.h>.
+	 */
 	(*buf)[0].JB_SP = (unsigned long) stack + UM_THREAD_SIZE -
-		sizeof(void *);
+		ARCH_INIT_SP_RESERVE;
 }
 
 #define INIT_JMP_NEW_THREAD 0
@@ -787,7 +859,7 @@ int start_idle_thread(void *stack, jmp_buf *switch_buf)
 	case INIT_JMP_NEW_THREAD:
 		(*switch_buf)[0].JB_IP = (unsigned long) uml_finishsetup;
 		(*switch_buf)[0].JB_SP = (unsigned long) stack +
-			UM_THREAD_SIZE - sizeof(void *);
+			UM_THREAD_SIZE - ARCH_INIT_SP_RESERVE;
 		break;
 	case INIT_JMP_CALLBACK:
 		(*cb_proc)(cb_arg);
