@@ -79,9 +79,20 @@
  */
 #define UPT_RESTART_SYSCALL(r)						\
 	do {								\
+		long __nr = (long)REGS_SYSCALL_NR((r)->gp);		\
+									\
 		UPT_IP(r) -= 4;						\
 		UPT_X(r, HOST_X0) = UPT_ORIG_X0(r);			\
-		UPT_X(r, HOST_X8) = REGS_SYSCALL_NR((r)->gp);		\
+		/*							\
+		 * Only reload x8 when the slot really holds a syscall	\
+		 * number. It comes from NT_ARM_SYSTEM_CALL, which the	\
+		 * host declines to supply outside a syscall stop,	\
+		 * leaving -1 -- and writing that into x8 would make the	\
+		 * guest re-execute the svc with a number nobody asked	\
+		 * for.							\
+		 */							\
+		if (__nr >= 0)						\
+			UPT_X(r, HOST_X8) = (unsigned long)__nr;	\
 	} while (0)
 
 extern unsigned long host_fp_size;
