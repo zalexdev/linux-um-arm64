@@ -27,6 +27,37 @@ config UML_ARM64
 	# value nor a child_tidptr -- it is threads, and therefore glibc, that
 	# make it visible.
 	select CLONE_BACKWARDS
+	#
+	# 16 KB pages, because the port has to run on them: Android 15 and later
+	# ship 16 KB kernels, and a UML guest's PAGE_SIZE cannot be smaller than
+	# its host's -- the guest's pages are host mmap()s, and an mmap smaller
+	# than the host's granularity simply fails. A 4 KB UML therefore cannot
+	# boot at all on a 16 KB host, which makes this a portability
+	# requirement rather than a tuning option.
+	#
+	# The reverse direction is free: a 16 KB guest runs on a 4 KB host, since
+	# each guest page is four host pages.
+	#
+	# 64 KB is deliberately absent. It is not a size Android or any server
+	# target here uses, and offering an untested size is worse than offering
+	# none.
+	select HAVE_PAGE_SIZE_16KB
+	#
+	# Frame pointers, as arch/arm64/Kconfig selects them for real hardware.
+	#
+	# Not a debug preference. UML's stack walker chains through the frame
+	# pointer and falls back to scanning the stack for anything that looks
+	# like a text address; get_frame_pointer() returns 0 outright when
+	# CONFIG_FRAME_POINTER is off (arch/um/include/asm/stacktrace.h), so the
+	# chain never advances, every frame is a guess, and save_stack_trace()
+	# -- which keeps only frames marked reliable -- returns nothing at all.
+	#
+	# Without this the behaviour depends on CONFIG_DEBUG_INFO, because
+	# FRAME_POINTER is "default y if (DEBUG_INFO && UML)" and UML selects
+	# nothing. So backtraces work in a development build and silently stop
+	# working in the size-tuned build someone puts on a phone, which is
+	# precisely where a backtrace is the only debugging tool left.
+	select ARCH_WANT_FRAME_POINTERS
 
 config 64BIT
 	def_bool y
