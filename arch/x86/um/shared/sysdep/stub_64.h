@@ -138,6 +138,17 @@ static __always_inline void *get_stub_data(void)
 		:: "i" (STUB_SIZE),					\
 		   "i" (&fn))
 
+/*
+ * Nothing to capture: FS_BASE and GS_BASE can only be changed through
+ * arch_prctl(), which is a syscall the kernel already intercepts, so its idea
+ * of them is never stale. See the arm64 version, where the guest can change its
+ * thread pointer without any syscall at all.
+ */
+static __always_inline void
+stub_seccomp_save_state(struct stub_data_arch *arch)
+{
+}
+
 static __always_inline void
 stub_seccomp_restore_state(struct stub_data_arch *arch)
 {

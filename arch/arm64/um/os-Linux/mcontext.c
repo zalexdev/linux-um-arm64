@@ -128,6 +128,20 @@ int get_stub_state(struct uml_pt_regs *regs, struct stub_data *data,
 
 	get_regs_from_mc(regs, mcontext);
 
+	/*
+	 * TPIDR_EL0 is not in the mcontext -- the host does not save it in a
+	 * signal frame, because on a real kernel it is per-thread state the
+	 * scheduler restores rather than something a handler can change. Under
+	 * UML the guest's threads all live in one stub process, so UML has to
+	 * track it, and the stub captured it for us on the way in.
+	 *
+	 * Reading it back rather than assuming it matters because the guest can
+	 * write TPIDR_EL0 itself with a single unprivileged "msr"; glibc and musl
+	 * both do exactly that when they set up the initial thread. See
+	 * stub_seccomp_save_state().
+	 */
+	regs->gp[HOST_TLS] = data->arch_data.tls;
+
 	fp = find_ctx(mcontext, UM_FPSIMD_MAGIC, &size);
 	if (!fp || size < sizeof(*fp))
 		return -EINVAL;

@@ -186,6 +186,29 @@ static __always_inline void *get_stub_data(void)
 		: "x30", "memory")
 
 /*
+ * Report the guest's current TLS back to the kernel.
+ *
+ * x86 has nothing to do here: FS_BASE can only be changed with arch_prctl(),
+ * which is a syscall and therefore something UML already sees. arm64 is
+ * different in kind -- TPIDR_EL0 is writable at EL0, so a guest changes its
+ * thread pointer with a bare "msr" and the kernel is never told.
+ *
+ * Something real does exactly that: glibc's TLS_INIT_TP writes tpidr_el0
+ * directly when it sets up the initial thread, as does musl. Without this
+ * readback UML's idea of the thread pointer stays whatever it was when the
+ * process started, and stub_seccomp_restore_state() below then *reinstates*
+ * that stale value the next time this stub runs a different guest thread --
+ * quietly destroying the main thread's TLS pointer in any multi-threaded
+ * process. The ptrace path does not have the problem because it reads
+ * NT_ARM_TLS on every stop; this is the seccomp path's equivalent.
+ */
+static __always_inline void
+stub_seccomp_save_state(struct stub_data_arch *arch)
+{
+	__asm__ volatile ("mrs %0, tpidr_el0" : "=r" (arch->tls));
+}
+
+/*
  * Reinstate guest TLS after the stub is resumed for a different guest thread.
  * On x86 this costs an arch_prctl(ARCH_SET_FS) syscall; on arm64 TPIDR_EL0 is
  * writable from EL0, so it is a single instruction and no host syscall at all.

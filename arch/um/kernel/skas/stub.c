@@ -118,6 +118,9 @@ stub_signal_interrupt(int sig, siginfo_t *info, void *p)
 	d->si_offset = (unsigned long)info - (unsigned long)&d->sigstack[0];
 	d->mctx_offset = (unsigned long)&uc->uc_mcontext - (unsigned long)&d->sigstack[0];
 
+	/* Capture arch state that is not part of the mcontext */
+	stub_seccomp_save_state(&d->arch_data);
+
 restart_wait:
 	d->futex = FUTEX_IN_KERN;
 	do {
