@@ -14,6 +14,18 @@
 #include <asm/unistd.h>
 #include <asm/delay.h>
 
+/*
+ * Seed the return register with -ENOSYS before the syscall-entry stop.
+ *
+ * Unconditional unless a subarch says otherwise, which preserves the x86
+ * behaviour: there the return register is not an argument register and native
+ * x86 genuinely leaves -ENOSYS in it at an entry stop. See the arm64 override
+ * in <sysdep/ptrace.h> for why that is wrong when the two alias.
+ */
+#ifndef UM_SEED_ENOSYS_BEFORE_TRACE
+#define UM_SEED_ENOSYS_BEFORE_TRACE(r)	1
+#endif
+
 void handle_syscall(struct uml_pt_regs *r)
 {
 	struct pt_regs *regs = container_of(r, struct pt_regs, regs);
@@ -21,11 +33,21 @@ void handle_syscall(struct uml_pt_regs *r)
 
 	/* Initialize the syscall number and default return value. */
 	UPT_SYSCALL_NR(r) = PT_SYSCALL_NR(r->gp);
-	PT_REGS_SET_SYSCALL_RETURN(regs, -ENOSYS);
+	if (UM_SEED_ENOSYS_BEFORE_TRACE(r))
+		PT_REGS_SET_SYSCALL_RETURN(regs, -ENOSYS);
 
 
-	if (syscall_trace_enter(regs))
+	if (syscall_trace_enter(regs)) {
+		/*
+		 * The tracer cancelled the call. Leave the return register
+		 * alone: a tracer that skips a syscall is expected to have set
+		 * the value it wants userspace to see, and on architectures
+		 * where that register is also an argument register, clobbering
+		 * it here would destroy an argument the tracer may have just
+		 * written.
+		 */
 		goto out;
+	}
 
 	/* Do the seccomp check after ptrace; failures should be fast. */
 	if (secure_computing() == -1)

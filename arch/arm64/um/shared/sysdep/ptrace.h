@@ -44,7 +44,28 @@
  * get_host_regs() and get_regs_from_mc() both capture x0 into HOST_ORIG_X0 at
  * the point the guest trapped, which is the value the ABI actually passed.
  */
-#define UPT_SYSCALL_ARG1(r) UPT_ORIG_X0(r)
+#define UPT_SYSCALL_ARG1(r) UPT_X(r, HOST_X0)
+
+/*
+ * When to seed the return register with -ENOSYS.
+ *
+ * x86 does it unconditionally before the syscall-entry stop, and that is
+ * faithful there: native x86 really does leave -ENOSYS in RAX at an entry stop,
+ * and RAX is not an argument register.
+ *
+ * On arm64 the return value and the first argument are both x0, so seeding
+ * early overwrites the argument -- and a guest tracer reading the classic
+ * register view then sees 0xffffffffffffffda as argument 1 of every syscall.
+ * gdb shows the wrong argument for every call; only tracers using
+ * PTRACE_GET_SYSCALL_INFO escape, because that routes through
+ * syscall_get_arguments().
+ *
+ * Native arm64 seeds it before the stop in exactly one case: when the incoming
+ * number is already NO_SYSCALL, so that a tracer which skips the call without
+ * setting x0 still gets an error rather than a stale argument
+ * (arch/arm64/kernel/syscall.c). Match that.
+ */
+#define UM_SEED_ENOSYS_BEFORE_TRACE(r)	((long)UPT_SYSCALL_NR(r) < 0)
 #define UPT_SYSCALL_ARG2(r) UPT_X(r, HOST_X1)
 #define UPT_SYSCALL_ARG3(r) UPT_X(r, HOST_X2)
 #define UPT_SYSCALL_ARG4(r) UPT_X(r, HOST_X3)
