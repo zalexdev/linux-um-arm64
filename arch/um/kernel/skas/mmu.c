@@ -49,6 +49,13 @@ int init_new_context(struct task_struct *task, struct mm_struct *mm)
 	mutex_init(&mm->context.turnstile);
 	spin_lock_init(&mm->context.sync_tlb_lock);
 
+	/*
+	 * Fault-around detector starts cold: prefault_level is used as an
+	 * array index in trap.c, so it must never be garbage.
+	 */
+	mm->context.prefault_next = 0;
+	mm->context.prefault_level = 0;
+
 	stack = __get_free_pages(GFP_KERNEL | __GFP_ZERO, ilog2(STUB_DATA_PAGES));
 	if (stack == 0) {
 		printk(KERN_ERR "%s: failed to allocate %d stub data pages\n",

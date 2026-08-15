@@ -281,6 +281,7 @@ extern long long os_nsecs(void);
 int syscall_stub_flush(struct mm_id *mm_idp);
 struct stub_syscall *syscall_stub_alloc(struct mm_id *mm_idp);
 void syscall_stub_dump_error(struct mm_id *mm_idp);
+int syscall_stub_free_slots(struct mm_id *mm_idp);
 
 int map(struct mm_id *mm_idp, unsigned long virt,
 	unsigned long len, int prot, int phys_fd,

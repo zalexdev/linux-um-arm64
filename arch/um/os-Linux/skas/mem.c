@@ -185,6 +185,25 @@ struct stub_syscall *syscall_stub_alloc(struct mm_id *mm_idp)
 	return sc;
 }
 
+/*
+ * How many more stub syscalls fit into the current batch without forcing a
+ * flush. The fault-around code in trap.c uses this to cap its window: a
+ * prefault that overflowed the batch would trigger a mid-batch handoff in
+ * do_syscall_stub, i.e. exactly the extra round trip prefaulting exists to
+ * avoid. Worst case each prefaulted page costs one slot (anonymous pages have
+ * arbitrary physmem offsets, so map() can rarely merge them).
+ */
+int syscall_stub_free_slots(struct mm_id *mm_idp)
+{
+	struct stub_data *proc_data = (void *)mm_idp->stack;
+
+	/* Batch is in an error state; report no room. */
+	if (mm_idp->syscall_data_len < 0)
+		return 0;
+
+	return ARRAY_SIZE(proc_data->syscall_data) - mm_idp->syscall_data_len;
+}
+
 static struct stub_syscall *syscall_stub_get_previous(struct mm_id *mm_idp,
 						      int syscall_type,
 						      unsigned long virt)

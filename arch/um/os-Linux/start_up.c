@@ -13,6 +13,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <string.h>
+#include <time.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
