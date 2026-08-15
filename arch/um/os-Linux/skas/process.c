@@ -177,7 +177,17 @@ void wait_stub_done_seccomp(struct mm_id *mm_idp, int running, int wait_sigsys)
 		/* We may receive a SIGALRM before SIGSYS, iterate again. */
 	} while (wait_sigsys && data->signal == SIGALRM);
 
-	if (data->mctx_offset > sizeof(data->sigstack) - sizeof(mcontext_t)) {
+	/*
+	 * Both halves matter. The subtraction underflows when a signal frame is
+	 * larger than sigstack[], which is not hypothetical: an arm64 mcontext_t
+	 * is around 4.4 KB against x86-64's few hundred bytes, so with 4 KB
+	 * pages it is bigger than the single page sigstack[] is. Without the
+	 * first test the bound becomes SIZE_MAX and every offset passes it,
+	 * which turns a stub that cannot work on this host into an
+	 * out-of-bounds read that looks like a crash somewhere else.
+	 */
+	if (sizeof(data->sigstack) < sizeof(mcontext_t) ||
+	    data->mctx_offset > sizeof(data->sigstack) - sizeof(mcontext_t)) {
 		printk(UM_KERN_ERR "%s : invalid mcontext offset", __func__);
 		goto out_kill;
 	}

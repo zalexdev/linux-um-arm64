@@ -236,6 +236,12 @@ extern unsigned long *exec_fp_regs;
 
 __initdata static struct stub_data *seccomp_test_stub_data;
 
+/*
+ * A stack for the probe helper. Only a few frames deep, but it must be well
+ * clear of the shared area -- see the comment at the clone() below.
+ */
+#define HELPER_STACK_SIZE (64 * 1024)
+
 static void __init sigsys_handler(int sig, siginfo_t *info, void *p)
 {
 	ucontext_t *uc = p;
@@ -312,6 +318,7 @@ static bool __init init_seccomp(void)
 	int status;
 	int n;
 	unsigned long sp;
+	void *helper_stack;
 
 	/*
 	 * We check that we can install a seccomp filter and then exit(0)
@@ -327,10 +334,24 @@ static bool __init init_seccomp(void)
 				      PROT_READ | PROT_WRITE,
 				      MAP_SHARED | MAP_ANON, 0, 0);
 
-	/* Use the syscall data area as stack, we just need something */
-	sp = (unsigned long)&seccomp_test_stub_data->syscall_data +
-	     sizeof(seccomp_test_stub_data->syscall_data) -
-	     sizeof(void *);
+	/*
+	 * Give the helper a stack of its own rather than carving one out of the
+	 * shared area.
+	 *
+	 * The alternate signal stack registered below covers that whole area,
+	 * as it does in the real stub. If the helper's stack were inside it,
+	 * sas_ss_flags() would report the thread as already running on the
+	 * alternate stack, SA_ONSTACK would be ignored, and the SIGSYS frame
+	 * would be pushed onto the helper's own few kilobytes instead -- which
+	 * on arm64 is not enough room for a signal frame and kills the helper
+	 * with SIGSEGV before the handler is ever entered.
+	 */
+	helper_stack = mmap(0, HELPER_STACK_SIZE, PROT_READ | PROT_WRITE,
+			    MAP_PRIVATE | MAP_ANON, -1, 0);
+	if (helper_stack == MAP_FAILED)
+		fatal_perror("check_seccomp : stack mmap failed");
+
+	sp = ((unsigned long)helper_stack + HELPER_STACK_SIZE) & ~15UL;
 	pid = clone(seccomp_helper, (void *)sp, CLONE_VFORK | CLONE_VM, NULL);
 
 	if (pid < 0)
@@ -340,10 +361,36 @@ static bool __init init_seccomp(void)
 	if (n < 0)
 		fatal_perror("check_seccomp : waitpid failed");
 
+	munmap(helper_stack, HELPER_STACK_SIZE);
+
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
 		struct uml_pt_regs *regs;
 		unsigned long fp_size;
 		int r;
+
+		/*
+		 * The handler reported where the host put the signal frame.
+		 * Everything downstream indexes sigstack[] with that offset, so
+		 * a frame that did not land inside sigstack[] is not merely a
+		 * failed probe -- it means this host's signal frames do not fit
+		 * the stub's data area, and running SECCOMP mode would have the
+		 * stub overwrite its own syscall queue and futex word every time
+		 * it takes a signal.
+		 *
+		 * This is a live concern rather than a theoretical one: an arm64
+		 * signal frame is around 4.6 KB against x86-64's ~1 KB, so with
+		 * 4 KB pages it does not fit in the single page sigstack[]
+		 * currently is. Refuse SECCOMP rather than corrupt the stub;
+		 * the ptrace path is unaffected.
+		 */
+		if (sizeof(seccomp_test_stub_data->sigstack) < sizeof(mcontext_t) ||
+		    seccomp_test_stub_data->mctx_offset >
+		    sizeof(seccomp_test_stub_data->sigstack) - sizeof(mcontext_t)) {
+			os_info("signal frame does not fit the stub data area\n");
+			munmap(seccomp_test_stub_data,
+			       sizeof(*seccomp_test_stub_data));
+			return false;
+		}
 
 		/* Fill in the host_fp_size from the mcontext. */
 		regs = calloc(1, sizeof(struct uml_pt_regs));
