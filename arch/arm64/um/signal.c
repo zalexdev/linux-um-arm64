@@ -295,8 +295,29 @@ SYSCALL_DEFINE0(rt_sigreturn)
 	if (restore_altstack(&uc->uc_stack))
 		goto segfault;
 
-	/* Do not let the syscall restart machinery act on this return value. */
-	PT_REGS_ORIG_SYSCALL(&current->thread.regs) = -1;
+	/*
+	 * Do not let the syscall restart machinery act on this return value.
+	 *
+	 * It is PT_REGS_SYSCALL_NR that has to be cleared, not
+	 * PT_REGS_ORIG_SYSCALL. arch/um/kernel/signal.c tests
+	 * "PT_REGS_SYSCALL_NR(regs) >= 0" to decide whether a syscall is in
+	 * flight, and that is uml_pt_regs.syscall -- a different field.
+	 *
+	 * x86 writes PT_REGS_SYSCALL_NR here and can write nothing else,
+	 * because there ORIG_SYSCALL aliases AX, which is also the return
+	 * register. On arm64 the two were deliberately separated, ORIG_SYSCALL
+	 * onto a synthetic slot, so translating the line by name moved it to
+	 * different storage and left uml_pt_regs.syscall holding
+	 * __NR_rt_sigreturn.
+	 *
+	 * The consequence is silent: a handler returning into a context whose
+	 * x0 happens to hold one of the four -ERESTART* values, with another
+	 * signal deliverable, gets its context rewritten -- the program counter
+	 * rewound four bytes and x0 replaced from a slot sigreturn never
+	 * restored. Rare enough that 550 clean gate runs did not hit it, and
+	 * entirely invisible when it does.
+	 */
+	PT_REGS_SYSCALL_NR(&current->thread.regs) = -1;
 	return PT_REGS_SYSCALL_RET(&current->thread.regs);
 
  segfault:
