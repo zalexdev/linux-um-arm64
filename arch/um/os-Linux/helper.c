@@ -211,8 +211,24 @@ int os_run_helper_thread(struct os_helper_thread **td_out,
 
 void os_kill_helper_thread(struct os_helper_thread *td)
 {
+#ifdef __BIONIC__
+	/*
+	 * bionic has no pthread_cancel, and deliberately so -- Android has
+	 * never implemented it, because asynchronous cancellation cannot be
+	 * made safe for arbitrary code.
+	 *
+	 * Both callers (the ubd I/O thread and the SIGIO writer) reach here
+	 * only on a teardown path, so detaching and letting process exit reap
+	 * the thread costs a thread that was about to die anyway. Recorded as a
+	 * limitation rather than hidden: on bionic the thread is not stopped,
+	 * it is abandoned, and a UML that tore down a ubd device and kept
+	 * running would leak one thread per teardown.
+	 */
+	pthread_detach(td->handle);
+#else
 	pthread_cancel(td->handle);
 	pthread_join(td->handle, NULL);
+#endif
 	kfree(td);
 }
 

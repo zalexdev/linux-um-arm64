@@ -43,6 +43,28 @@ typedef void (*exitcall_t)(void);
 
 #include <linux/compiler_types.h>
 
+/*
+ * All this header needs from the kernel's compiler attributes is __section and
+ * __used, and reaching them through <linux/compiler_types.h> is not reliable
+ * here. This header is also used by the USER_CFLAGS objects, which compile
+ * against the host's sysroot rather than with -nostdinc, so a sysroot that
+ * ships its own linux/compiler_types.h wins the include and the kernel's copy
+ * is never seen.
+ *
+ * The Android NDK does exactly that: its sysroot carries a 265-byte uapi stub
+ * of that name which defines neither macro. The include then succeeds, __init
+ * expands to a bare __section(...), and every __init in UML becomes "expected
+ * parameter declarator" -- an error that says nothing about the real cause.
+ * The host glibc sysroot has no such file, which is why this only appears when
+ * building against bionic.
+ */
+#ifndef __section
+#define __section(s)	__attribute__((__section__(s)))
+#endif
+#ifndef __used
+#define __used		__attribute__((__used__))
+#endif
+
 /* These are for everybody (although not all archs will actually
    discard it in modules) */
 #define __init		__section(".init.text")

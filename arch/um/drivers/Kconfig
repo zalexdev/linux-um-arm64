@@ -126,7 +126,26 @@ menu "UML Network Devices"
 
 config UML_NET_VECTOR
 	bool "Vector I/O high performance network devices"
-	select MAY_HAVE_RUNTIME_DEPS
+	#
+	# Deliberately not "select MAY_HAVE_RUNTIME_DEPS".
+	#
+	# That select existed because two of this driver's transports resolve
+	# hostnames with getaddrinfo(), which in a statically linked glibc binary
+	# may need NSS modules at run time. But it applied to the whole driver,
+	# and so made CONFIG_STATIC_LINK unavailable to anyone enabling vector
+	# networking at all -- including the transports that resolve nothing.
+	#
+	# getaddrinfo() appears exactly twice, both in user_init_socket_fds(),
+	# reached only by the gre and l2tpv3 transports. The tap, raw, bess, vde
+	# and fd transports never call it. And where it is called, a static
+	# binary degrades rather than breaks: numeric addresses resolve without
+	# NSS, and a name that needs it fails with an EAI_ error like any other
+	# lookup failure.
+	#
+	# The combination this was blocking is the only way to have networking at
+	# all on a host with no glibc, which is to say on Android: the binary has
+	# to be static to run there, and the fd transport plus an unprivileged
+	# userspace network stack is what gives an unrooted guest a network.
 	help
 	  This User-Mode Linux network driver uses multi-message send
 	  and receive functions. The host running the UML guest must have

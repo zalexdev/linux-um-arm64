@@ -34,6 +34,7 @@
 #include <sysdep/stub.h>
 #include <registers.h>
 #include <skas.h>
+#include <skas.h>
 #include "internal.h"
 
 static void ptrace_child(void)
@@ -83,29 +84,35 @@ static void fatal_perror(const char *str)
 
 static void fatal(char *fmt, ...)
 {
+	char buf[512];
 	va_list list;
 
 	va_start(list, fmt);
-	vfprintf(stderr, fmt, list);
+	vsnprintf(buf, sizeof(buf), fmt, list);
 	va_end(list);
+	write(2, buf, strlen(buf));
 
 	exit(1);
 }
 
 static void non_fatal(char *fmt, ...)
 {
+	char buf[512];
 	va_list list;
 
 	va_start(list, fmt);
-	vfprintf(stderr, fmt, list);
+	vsnprintf(buf, sizeof(buf), fmt, list);
 	va_end(list);
+	write(2, buf, strlen(buf));
 }
 
 static int start_ptraced_child(void)
 {
 	int pid, n, status;
 
-	fflush(stdout);
+	/* No fflush(stdout): referencing the stdio object pulls in a copy
+	 * relocation the UML linker script cannot align. Nothing here uses
+	 * buffered stdout. */
 
 	pid = fork();
 	if (pid == 0)
@@ -139,15 +146,38 @@ static void stop_ptraced_child(int pid, int exitcode)
 	}
 }
 
-static void __init check_sysemu(void)
+/*
+ * Reap a probe child without the fatal() that stop_ptraced_child() applies, so
+ * a capability that is merely absent can be reported as absent rather than
+ * ending the boot.
+ */
+static int __init finish_probe_child(int pid, int exitcode)
 {
-	int pid, n, status, count=0;
+	int status, n;
 
-	os_info("Checking syscall emulation for ptrace...");
+	if (ptrace(PTRACE_CONT, pid, 0, 0) < 0) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		return 0;
+	}
+
+	CATCH_EINTR(n = waitpid(pid, &status, 0));
+	if (n < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != exitcode) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, WNOHANG);
+		return 0;
+	}
+	return 1;
+}
+
+/* The classic probe: PTRACE_SYSEMU stops before the syscall and never runs it. */
+static int __init try_sysemu(void)
+{
+	int pid, n, status, count = 0;
+
 	pid = start_ptraced_child();
 
-	if ((ptrace(PTRACE_SETOPTIONS, pid, 0,
-		   (void *) PTRACE_O_TRACESYSGOOD) < 0))
+	if (ptrace(PTRACE_SETOPTIONS, pid, 0, (void *)PTRACE_O_TRACESYSGOOD) < 0)
 		fatal_perror("check_sysemu: PTRACE_SETOPTIONS failed");
 
 	while (1) {
@@ -158,37 +188,147 @@ static void __init check_sysemu(void)
 		if (n < 0)
 			fatal_perror("check_sysemu: wait failed");
 
-		if (WIFSTOPPED(status) &&
-		    (WSTOPSIG(status) == (SIGTRAP|0x80))) {
-			if (!count) {
-				non_fatal("check_sysemu: SYSEMU_SINGLESTEP "
-					  "doesn't singlestep");
+		if (WIFSTOPPED(status) && WSTOPSIG(status) == (SIGTRAP | 0x80)) {
+			if (!count)
 				goto fail;
-			}
-			n = ptrace_set_syscall_ret(pid, os_getpid());
-			if (n < 0)
-				fatal_perror("check_sysemu : failed to modify "
-					     "system call return");
+			if (ptrace_set_syscall_ret(pid, os_getpid()) < 0)
+				goto fail;
 			break;
-		}
-		else if (WIFSTOPPED(status) && (WSTOPSIG(status) == SIGTRAP))
+		} else if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
 			count++;
-		else {
-			non_fatal("check_sysemu: expected SIGTRAP or "
-				  "(SIGTRAP | 0x80), got status = %d\n",
-				  status);
+		} else {
 			goto fail;
 		}
 	}
-	stop_ptraced_child(pid, 0);
 
-	os_info("OK\n");
-
-	return;
+	return finish_probe_child(pid, 0);
 
 fail:
-	stop_ptraced_child(pid, 1);
-	fatal("missing\n");
+	kill(pid, SIGKILL);
+	CATCH_EINTR(waitpid(pid, &status, 0));
+	return 0;
+}
+
+/*
+ * The substitute, for hosts without PTRACE_SYSEMU.
+ *
+ * PTRACE_SYSEMU is not doing anything a tracer cannot do for itself: it stops
+ * at syscall entry and declines to execute the call. Writing -1 into the
+ * in-flight syscall number is the documented way to cancel a syscall from a
+ * tracer, and it has been available for as long as the architecture has had a
+ * syscall-number regset -- since 3.19 on arm64, where PTRACE_SYSEMU itself only
+ * arrived in 5.3. That gap is not academic: phones ship a current Android on a
+ * years-old kernel, and 4.19 is a live target.
+ *
+ * Probing it rather than deriving it from a version number is deliberate. This
+ * has to be true of the host actually underneath us -- which may be a container,
+ * an emulator or a vendor kernel with its own patches -- and a probe that runs
+ * the whole sequence end to end is the only thing that establishes that.
+ *
+ * The sequence is exactly what userspace() will do per syscall: stop at entry,
+ * cancel, step off the stop, then set the return value the guest sees.
+ */
+static int __init try_syscall_cancel(void)
+{
+	int pid, n, status;
+
+	pid = start_ptraced_child();
+
+	if (ptrace(PTRACE_SETOPTIONS, pid, 0, (void *)PTRACE_O_TRACESYSGOOD) < 0)
+		fatal_perror("check_sysemu: PTRACE_SETOPTIONS failed");
+
+	if (ptrace(PTRACE_SYSCALL, pid, 0, 0) < 0)
+		goto fail;
+	CATCH_EINTR(n = waitpid(pid, &status, WUNTRACED));
+	if (n < 0)
+		fatal_perror("check_sysemu: wait failed");
+	if (!WIFSTOPPED(status) || WSTOPSIG(status) != (SIGTRAP | 0x80))
+		goto fail;
+
+	if (ptrace_set_syscall_nr(pid, -1) < 0)
+		goto fail;
+
+	if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0) < 0)
+		goto fail;
+	CATCH_EINTR(n = waitpid(pid, &status, WUNTRACED));
+	if (n < 0 || !WIFSTOPPED(status))
+		goto fail;
+
+	if (ptrace_set_syscall_ret(pid, os_getpid()) < 0)
+		goto fail;
+
+	/*
+	 * ptrace_child() exits 0 only if the syscall returned the *parent's*
+	 * pid, which can only happen if the call never ran and the value above
+	 * is what the child saw. A cancel that silently did not take shows up
+	 * here as the child's own pid, i.e. exit code 1, not as a pass.
+	 */
+	return finish_probe_child(pid, 0);
+
+fail:
+	kill(pid, SIGKILL);
+	CATCH_EINTR(waitpid(pid, &status, 0));
+	return 0;
+}
+
+static int force_no_sysemu __initdata;
+
+static int __init uml_nosysemu(char *line, int *add)
+{
+	*add = 0;
+	force_no_sysemu = 1;
+	return 0;
+}
+
+__uml_setup("nosysemu", uml_nosysemu,
+"nosysemu\n"
+"    Pretend the host has no PTRACE_SYSEMU and use the syscall-cancellation\n"
+"    path instead. That path exists for hosts older than the kernel that\n"
+"    introduced PTRACE_SYSEMU for the architecture -- 5.3 on arm64 -- which\n"
+"    in practice means phones, where a current Android is routinely paired\n"
+"    with a years-old kernel.\n"
+"\n"
+"    Without this option that path can only be exercised by finding such a\n"
+"    host, which is precisely the environment that is hardest to debug on.\n"
+"    With it, every existing test can run against it on any machine.\n\n"
+);
+
+static void __init check_sysemu(void)
+{
+	if (force_no_sysemu) {
+		os_info("Checking syscall emulation for ptrace...");
+		os_info("skipped (nosysemu)\n");
+		os_info("Checking syscall cancellation instead...");
+		if (try_syscall_cancel()) {
+			have_ptrace_sysemu = 0;
+			os_info("OK\n");
+			return;
+		}
+		fatal("missing\n\nnosysemu was requested but this host cannot "
+		      "cancel a syscall from a tracer.\n");
+	}
+
+	os_info("Checking syscall emulation for ptrace...");
+	if (try_sysemu()) {
+		have_ptrace_sysemu = 1;
+		os_info("OK\n");
+		return;
+	}
+	os_info("missing\n");
+
+	os_info("Checking syscall cancellation instead...");
+	if (try_syscall_cancel()) {
+		have_ptrace_sysemu = 0;
+		os_info("OK\n");
+		os_info("Host lacks PTRACE_SYSEMU; using PTRACE_SYSCALL with "
+			"syscall cancellation (one extra ptrace call per guest "
+			"syscall)\n");
+		return;
+	}
+
+	fatal("missing\n\nThis host provides neither PTRACE_SYSEMU nor a "
+	      "working syscall cancellation, and UML cannot intercept guest "
+	      "syscalls without one of them.\n");
 }
 
 static void __init check_ptrace(void)
@@ -584,7 +724,13 @@ extern long elf_aux_min_sigstack;
  */
 static void __init check_stub_sigstack(void)
 {
-	unsigned long have = STUB_DATA_PAGES * UM_KERN_PAGE_SIZE;
+	/*
+	 * The stack itself, not the whole stub data area: one of those pages is
+	 * bookkeeping and no signal frame may land in it. Reporting the larger
+	 * number would overstate the headroom by a page and could describe a
+	 * host as fitting when it does not.
+	 */
+	unsigned long have = sizeof(((struct stub_data *)NULL)->sigstack);
 
 	if (!elf_aux_min_sigstack) {
 		os_info("Stub signal stack: %lu bytes (host publishes no AT_MINSIGSTKSZ)\n",
@@ -647,6 +793,15 @@ void __init os_early_checks(void)
 	if (seccomp_config) {
 		if (init_seccomp()) {
 			using_seccomp = 1;
+			/*
+			 * Which mode is in use decides how much every guest
+			 * syscall costs -- SECCOMP handles them in-process via
+			 * SIGSYS, ptrace pays a stop and a waitpid per call --
+			 * so it is the first thing anyone asks when the guest
+			 * feels slow. Saying it once at boot is cheaper than
+			 * inferring it from which probe lines are absent.
+			 */
+			os_info("Userspace mode: SECCOMP\n");
 			return;
 		}
 
@@ -658,6 +813,7 @@ void __init os_early_checks(void)
 		fatal("SMP is not supported with PTRACE userspace.\n");
 
 	using_seccomp = 0;
+	os_info("Userspace mode: ptrace\n");
 	check_ptrace();
 
 	pid = start_ptraced_child();

@@ -23,7 +23,36 @@
 #define STUB_START stub_start
 #define STUB_CODE STUB_START
 #define STUB_DATA (STUB_CODE + UM_KERN_PAGE_SIZE)
+/*
+ * One page of bookkeeping plus a signal stack. In SECCOMP mode the host kernel
+ * writes a complete signal frame onto that stack when it delivers SIGSYS to the
+ * stub, so it has to be big enough for the largest frame this host can produce.
+ *
+ * On x86 one page is comfortable. On arm64 it is not: sizeof(mcontext_t) alone
+ * is 4384 bytes, because the architecture reserves __reserved[4096] for the
+ * FPSIMD/SVE/SME records, and a measured frame is 4576 bytes -- larger than a
+ * 4 KiB page before siginfo is even counted. arm64 publishes the real
+ * requirement in AT_MINSIGSTKSZ, which is 4720 on a plain Cortex-A76 and 9984
+ * on a host with 512-bit SVE, so the size is a property of the host rather than
+ * a constant that can be measured once.
+ *
+ * Four pages therefore, giving a 12 KiB stack at 4 KiB pages, which covers
+ * every AT_MINSIGSTKSZ seen so far with room to spare. At 16 KiB pages a single
+ * page is already larger than that, so the layout is unchanged there.
+ *
+ * A power of two is required, not merely tidy: init_new_context() allocates
+ * this with __get_free_pages(..., ilog2(STUB_DATA_PAGES)), so a non-power-of-two
+ * would silently allocate fewer pages than the structure occupies.
+ *
+ * The remaining risk -- a host whose AT_MINSIGSTKSZ exceeds even this -- is not
+ * papered over: check_stub_sigstack() compares the two at boot and refuses
+ * SECCOMP mode with a message naming both numbers.
+ */
+#if defined(__aarch64__) && UM_KERN_PAGE_SIZE < 16384
+#define STUB_DATA_PAGES 4
+#else
 #define STUB_DATA_PAGES 2
+#endif
 #define STUB_SIZE ((1 + STUB_DATA_PAGES) * UM_KERN_PAGE_SIZE)
 #define STUB_END (STUB_START + STUB_SIZE)
 

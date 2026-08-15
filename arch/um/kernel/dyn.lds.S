@@ -157,6 +157,16 @@ SECTIONS
   PROVIDE (edata = .);
   .bss            : {
    __bss_start = .;
+   /*
+    * Copy relocations land in .dynbss, and with an explicit linker script the
+    * linker places them at the current location rather than re-aligning for
+    * them. A libc whose exported data needs 8-byte alignment then fails to
+    * link: bionic's stderr is a pointer, and lld rejects the reference with
+    * "improper alignment for relocation R_AARCH64_LDST64_ABS_LO12_NC".
+    * glibc does not show this because UML has historically been linked
+    * statically against it here, and a static link has no copy relocations.
+    */
+   . = ALIGN(16);
    *(.dynbss)
    *(.bss .bss.* .gnu.linkonce.b.*)
    *(COMMON)

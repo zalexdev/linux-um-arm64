@@ -568,7 +568,13 @@ int os_create_unix_socket(const char *file, int len, int close_on_exec)
 
 void os_flush_stdout(void)
 {
-	fflush(stdout);
+	/*
+	 * Nothing to flush: UML's own output goes to fd 1 and fd 2 with
+	 * write(2), deliberately, because referencing the stdio stdout/stderr
+	 * objects pulls copy relocations into the binary that the UML linker
+	 * script has no aligned home for -- which is what makes linking
+	 * against bionic fail. See os_write_stderr() in util.c.
+	 */
 }
 
 int os_lock_file(int fd, int excl)

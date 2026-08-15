@@ -78,10 +78,41 @@ vmlinux_link()
 	objs="${objs} init/version-timestamp.o"
 
 	if [ "${SRCARCH}" = "um" ]; then
+		# Rename the kernel symbols that the target libc also references,
+		# before it gets a chance to bind to them. Doing it here rather
+		# than with -D during compilation keeps the preprocessor out of
+		# it: these names also occur as bare tokens that other headers
+		# paste into identifiers, and rewriting those breaks builds in
+		# places that have nothing to do with libc. See the list itself
+		# for which names and why.
+		if [ -n "${UM_REDEF_SYMS}" ] && [ -f "${UM_REDEF_SYMS}" ]; then
+			for a in ${objs} ${libs}; do
+				case "${a}" in
+				*.a|*.o)
+					${OBJCOPY} --redefine-syms="${UM_REDEF_SYMS}" \
+						"${a}" || exit 1
+					;;
+				esac
+			done
+		fi
+
 		wl=-Wl,
 		ld="${CC}"
 		ldflags="${CFLAGS_vmlinux}"
-		ldlibs="-lutil -lrt -lpthread"
+		# glibc keeps these in separate archives; bionic folds all
+		# three into libc, so -lutil, -lrt and -lpthread name libraries
+		# that do not exist and the link fails outright. Ask the
+		# compiler which of them can actually be linked rather than
+		# assuming a libc -- UML links with $(CC), so this is the same
+		# driver that will do the real link.
+		ldlibs=""
+		for lib in util rt pthread; do
+			if echo 'int main(void){return 0;}' | \
+			   ${CC} ${CFLAGS_vmlinux} -x c - -l${lib} \
+				 -o /dev/null >/dev/null 2>&1; then
+				ldlibs="${ldlibs} -l${lib}"
+			fi
+		done
 	else
 		wl=
 		ld="${LD}"

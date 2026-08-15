@@ -302,15 +302,32 @@ static int __init parse_host_cpu_line(char *line)
 	return arch_parse_host_cpu_flags(line);
 }
 
+/*
+ * Strip an address tag before using a pointer as an address limit.
+ *
+ * arm64 implements top-byte-ignore, and Android turns it on: pointers there
+ * routinely carry a non-zero tag in bits 56-63, which the hardware discards on
+ * access but which is very much present in the value. Deriving the top of the
+ * address space from a tagged stack pointer therefore produces something like
+ * 0xb400007e76fe7000, and everything computed from it -- stub placement, guest
+ * TASK_SIZE -- is nonsense. The untagged value here is 0x7e76fe7000, which is a
+ * plausible stack address on this host's 39-bit user address space.
+ *
+ * Masking is unconditional because an untagged pointer is unchanged by it.
+ */
+#define UM_ADDR_TAG_MASK	((1UL << 56) - 1)
+
 static unsigned long __init get_top_address(char **envp)
 {
-	unsigned long top_addr = (unsigned long) &top_addr;
+	unsigned long top_addr = (unsigned long) &top_addr & UM_ADDR_TAG_MASK;
 	int i;
 
 	/* The earliest variable should be after the program name in ELF */
 	for (i = 0; envp[i]; i++) {
-		if ((unsigned long) envp[i] > top_addr)
-			top_addr = (unsigned long) envp[i];
+		unsigned long e = (unsigned long) envp[i] & UM_ADDR_TAG_MASK;
+
+		if (e > top_addr)
+			top_addr = e;
 	}
 
 	return PAGE_ALIGN(top_addr + 1);
@@ -353,7 +370,45 @@ int __init linux_main(int argc, char **argv, char **envp)
 	 * TASK_SIZE needs to be PGDIR_SIZE aligned or else exit_mmap craps
 	 * out
 	 */
-	task_size = task_size & PGDIR_MASK;
+	if (task_size & PGDIR_MASK) {
+		task_size = task_size & PGDIR_MASK;
+	} else {
+		/*
+		 * The host's entire user address space is smaller than one
+		 * guest PGDIR, so rounding down to PGDIR_SIZE lands on zero --
+		 * and a zero TASK_SIZE fails every guest mmap, so the first
+		 * exec returns -ENOMEM and the boot dies with "Requested init
+		 * failed (error -12)" and no other clue.
+		 *
+		 * This is not a corner case. A 64-bit UML guest has
+		 * PGDIR_SIZE == 512 GiB, and arm64 hosts built with
+		 * CONFIG_ARM64_VA_BITS_39 -- the usual choice for a 4 KiB-page
+		 * kernel, and what Android devices overwhelmingly ship -- have
+		 * exactly 512 GiB of user address space. The subtraction for
+		 * the stub then puts the top just below the only aligned value
+		 * that would have fit.
+		 *
+		 * Align to the next level down instead. UML's page tables are
+		 * software structures walked by UML itself -- the host does the
+		 * real translation through mmap -- so the granularity is a
+		 * choice, not a hardware constraint, and one PGDIR entry
+		 * covering a partially used range is exactly what the topmost
+		 * entry looks like on any host anyway.
+		 */
+		task_size = task_size & PUD_MASK;
+	}
+
+	/*
+	 * Every guest mapping is bounded by task_size, and task_size is derived
+	 * from where the *host* put this process's stack. When that derivation
+	 * goes wrong the failure is silent and total: every guest mmap returns
+	 * -ENOMEM, so the first exec fails with -12 and nothing anywhere says
+	 * why. Print the three numbers -- one line, once, at boot -- because
+	 * reconstructing them afterwards requires a debugger on a host that may
+	 * be a phone.
+	 */
+	os_info("Address space: host top 0x%lx, stub at 0x%lx, guest TASK_SIZE 0x%lx\n",
+		stub_start + STUB_SIZE, stub_start, task_size);
 
 	/* OS sanity checks that need to happen before the kernel runs */
 	os_early_checks();

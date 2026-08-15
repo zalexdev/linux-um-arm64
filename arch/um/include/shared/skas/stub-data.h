@@ -14,6 +14,19 @@
 #include <sysdep/stub-data.h>
 #include <mm_id.h>
 
+/* See the note in skas/mm_id.h: a sysroot's linux/compiler_types.h can shadow
+ * the kernel's, leaving the attribute macros undefined for USER_CFLAGS objects.
+ */
+#ifndef __aligned
+#define __aligned(x)	__attribute__((__aligned__(x)))
+#endif
+#ifndef __section
+#define __section(x)	__attribute__((__section__(x)))
+#endif
+#ifndef __used
+#define __used		__attribute__((__used__))
+#endif
+
 #define FUTEX_IN_CHILD 0
 #define FUTEX_IN_KERN 1
 
@@ -69,8 +82,16 @@ struct stub_data {
 	/* seccomp architecture specific state restore */
 	struct stub_data_arch arch_data;
 
-	/* Stack for our signal handlers and for calling into . */
-	unsigned char sigstack[UM_KERN_PAGE_SIZE] __aligned(UM_KERN_PAGE_SIZE);
+	/*
+	 * Stack for our signal handlers and for calling into .
+	 *
+	 * Sized from STUB_DATA_PAGES rather than fixed at one page: in SECCOMP
+	 * mode the host writes a whole signal frame here, and on arm64 that
+	 * frame is larger than a 4 KiB page. See the comment on STUB_DATA_PAGES
+	 * in as-layout.h.
+	 */
+	unsigned char sigstack[(STUB_DATA_PAGES - 1) * UM_KERN_PAGE_SIZE]
+		__aligned(UM_KERN_PAGE_SIZE);
 };
 
 #endif

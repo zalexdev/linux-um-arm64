@@ -1,0 +1,42 @@
+# Kernel symbols renamed when linking against bionic.
+#
+# These are names the kernel defines and bionic's libc also references. In a
+# static link the linker is happy to satisfy libc's reference with the kernel's
+# definition, and the result is libc calling into the kernel: sched_getaffinity
+# was the one that showed the shape of the problem, with bionic's start-up
+# reaching the kernel's implementation and dereferencing a task_struct that does
+# not exist yet. Nothing warns -- libc only references these, so there is no
+# duplicate-definition error to notice.
+#
+# Renaming happens on the object files rather than with -D. The preprocessor
+# does not know the difference between a function name and a token being pasted
+# into an identifier: -Dsnprintf=kernel_snprintf also rewrites the bare
+# "snprintf" inside __BPF_FUNC_MAPPER, so kernel/bpf/disasm.c ends up asking for
+# BPF_FUNC_kernel_snprintf and CONFIG_BPF_SYSCALL will not build. objcopy
+# renames definitions and references together and cannot make that mistake.
+#
+# Derived, not guessed:
+#   llvm-nm --undefined-only libc.a                > A
+#   llvm-nm --defined-only --extern-only vmlinux.a > B
+#   comm -12 A B
+snprintf kernel_snprintf
+vsnprintf kernel_vsnprintf
+sprintf kernel_sprintf
+vsprintf kernel_vsprintf
+sscanf kernel_sscanf
+vsscanf kernel_vsscanf
+stpcpy kernel_stpcpy
+getrusage kernel_getrusage
+sem_init kernel_sem_init
+timer_delete kernel_timer_delete
+sched_setaffinity kernel_sched_setaffinity
+sched_getaffinity kernel_sched_getaffinity
+sched_setscheduler kernel_sched_setscheduler
+abort kernel_abort
+strcasecmp kernel_strcasecmp
+strncasecmp kernel_strncasecmp
+strcspn kernel_strcspn
+strlcat kernel_strlcat
+strpbrk kernel_strpbrk
+strsep kernel_strsep
+strstr kernel_strstr

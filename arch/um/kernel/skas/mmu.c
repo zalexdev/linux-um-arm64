@@ -50,8 +50,11 @@ int init_new_context(struct task_struct *task, struct mm_struct *mm)
 	spin_lock_init(&mm->context.sync_tlb_lock);
 
 	stack = __get_free_pages(GFP_KERNEL | __GFP_ZERO, ilog2(STUB_DATA_PAGES));
-	if (stack == 0)
+	if (stack == 0) {
+		printk(KERN_ERR "%s: failed to allocate %d stub data pages\n",
+		       __func__, STUB_DATA_PAGES);
 		goto out;
+	}
 
 	new_id->stack = stack;
 	new_id->syscall_data_len = 0;
@@ -63,8 +66,11 @@ int init_new_context(struct task_struct *task, struct mm_struct *mm)
 	}
 
 	ret = start_userspace(new_id);
-	if (ret < 0)
+	if (ret < 0) {
+		printk(KERN_ERR "%s: start_userspace failed: %d\n",
+		       __func__, ret);
 		goto out_free;
+	}
 
 	/* Ensure the new MM is clean and nothing unwanted is mapped */
 	unmap(new_id, 0, STUB_START);

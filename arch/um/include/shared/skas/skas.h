@@ -10,6 +10,13 @@
 
 extern int using_seccomp;
 
+/*
+ * Whether the host implements PTRACE_SYSEMU. Where it does not, UML builds the
+ * same semantics out of PTRACE_SYSCALL and a syscall cancellation; see
+ * check_sysemu(). Set once at boot, before any stub exists.
+ */
+extern int have_ptrace_sysemu;
+
 extern void new_thread_handler(void);
 extern void handle_syscall(struct uml_pt_regs *regs);
 extern unsigned long current_stub_stack(void);

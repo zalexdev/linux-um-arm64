@@ -181,6 +181,32 @@ __uml_setup("quiet", quiet_cmd_param,
  */
 int vscnprintf(char *buf, size_t size, const char *fmt, va_list args);
 
+/*
+ * Write straight to fd 2 rather than through stderr.
+ *
+ * Referencing stdio's stderr object pulls a copy relocation into the UML
+ * binary, and UML's linker script gives the linker no aligned home for one:
+ * linking against bionic then fails with "improper alignment for relocation
+ * R_AARCH64_LDST64_ABS_LO12_NC" on stderr, because bionic's is an 8-byte
+ * pointer and the script places the copy at a 4-byte boundary. glibc builds
+ * never showed it because UML is linked statically against glibc here, and a
+ * static link has no copy relocations at all.
+ *
+ * Nothing is lost: this output is diagnostics, it is line-at-a-time, and it
+ * was already unbuffered in effect.
+ */
+static void os_write_stderr(const char *buf, int len)
+{
+	while (len > 0) {
+		ssize_t n = write(2, buf, len);
+
+		if (n <= 0)
+			return;
+		buf += n;
+		len -= n;
+	}
+}
+
 void os_info(const char *fmt, ...)
 {
 	char buf[256];
@@ -192,7 +218,7 @@ void os_info(const char *fmt, ...)
 
 	va_start(list, fmt);
 	len = vscnprintf(buf, sizeof(buf), fmt, list);
-	fwrite(buf, len, 1, stderr);
+	os_write_stderr(buf, len);
 	va_end(list);
 }
 
@@ -204,6 +230,6 @@ void os_warn(const char *fmt, ...)
 
 	va_start(list, fmt);
 	len = vscnprintf(buf, sizeof(buf), fmt, list);
-	fwrite(buf, len, 1, stderr);
+	os_write_stderr(buf, len);
 	va_end(list);
 }

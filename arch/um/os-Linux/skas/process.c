@@ -13,6 +13,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <mem_user.h>
+
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -31,7 +32,25 @@
 #include <linux/futex.h>
 #include <linux/threads.h>
 #include <timetravel.h>
-#include <asm-generic/rwonce.h>
+/*
+ * __READ_ONCE, without <asm-generic/rwonce.h>.
+ *
+ * That header needs the kernel's compiler attributes, and a USER_CFLAGS object
+ * cannot rely on reaching them: arch/um/Makefile adds the kernel's include
+ * directory with -idirafter, i.e. *after* the system directories, so a sysroot
+ * that ships its own linux/compiler_types.h wins. The Android NDK's sysroot
+ * does exactly that, and rwonce.h then fails on __no_sanitize_or_inline.
+ *
+ * Force-including the kernel's compiler_types.h instead is not an option: it
+ * defines __private, which bionic uses as a struct member name in
+ * <bits/pthread_types.h>, so every pthread type stops compiling.
+ *
+ * This file uses one macro from that header and nothing else, and this is the
+ * kernel's own uninstrumented definition of it.
+ */
+#ifndef __READ_ONCE
+#define __READ_ONCE(x)	(*(const volatile __typeof__(x) *)&(x))
+#endif
 #include "../internal.h"
 
 int is_skas_winch(int pid, int fd, void *data)
@@ -323,13 +342,66 @@ extern char *tempdir;
 #define MFD_EXEC 0x0010U
 #endif
 
+static char *stub_exe_path __initdata;
+
+static int __init uml_stub_exe_setup(char *line, int *add)
+{
+	*add = 0;
+	stub_exe_path = line;
+	return 0;
+}
+
+__uml_setup("stub_exe=", uml_stub_exe_setup,
+"stub_exe=<path>\n"
+"    Execute the stub from this file instead of from an anonymous memfd.\n"
+"\n"
+"    UML normally writes its embedded stub into a memfd and execs that, which\n"
+"    needs nothing from the filesystem. Android forbids it: an app process runs\n"
+"    in the untrusted_app SELinux domain under a W^X policy, where the only\n"
+"    place it may execute from is the native library directory unpacked from\n"
+"    its APK. Neither a memfd nor a file the app wrote itself is executable\n"
+"    there.\n"
+"\n"
+"    Point this at a copy of arch/um/kernel/skas/stub_exe shipped as one of\n"
+"    those libraries. The file must be exactly that stub: it is exec'd as the\n"
+"    userspace half of every guest address space.\n\n"
+);
+
 static int __init init_stub_exe_fd(void)
 {
 	size_t written = 0;
 	char *tmpfile = NULL;
 
+	/*
+	 * An explicit path bypasses the memfd entirely -- there is nothing to
+	 * write, because the file already holds the stub.
+	 */
+	if (stub_exe_path) {
+		stub_exe_fd = open(stub_exe_path, O_RDONLY | O_CLOEXEC);
+		if (stub_exe_fd < 0)
+			panic("Could not open stub binary '%s': %d",
+			      stub_exe_path, -errno);
+		return 0;
+	}
+
 	stub_exe_fd = memfd_create("uml-userspace",
 				   MFD_EXEC | MFD_CLOEXEC | MFD_ALLOW_SEALING);
+
+	/*
+	 * MFD_EXEC only exists from 6.3. Older kernels reject unknown
+	 * memfd_create flags with EINVAL -- and on those a memfd is executable
+	 * anyway, since MFD_EXEC was introduced precisely to make that default
+	 * something a process could opt out of. Retry without it.
+	 *
+	 * Worth the retry rather than accepting the temporary-file fallback:
+	 * that path needs a tmpdir that permits execution, and on Android the
+	 * obvious candidate is /tmp, which is tmpfs and whose SELinux label the
+	 * shell domain may not be allowed to execute from. The memfd works
+	 * there today; a file on disk is one policy decision away from not.
+	 */
+	if (stub_exe_fd < 0 && errno == EINVAL)
+		stub_exe_fd = memfd_create("uml-userspace",
+					   MFD_CLOEXEC | MFD_ALLOW_SEALING);
 
 	if (stub_exe_fd < 0) {
 		printk(UM_KERN_INFO "Could not create executable memfd, using temporary file!");
@@ -389,6 +461,13 @@ static int __init init_stub_exe_fd(void)
 __initcall(init_stub_exe_fd);
 
 int using_seccomp;
+
+/*
+ * Assume the host has PTRACE_SYSEMU until check_sysemu() says otherwise. Every
+ * host that can run x86 UML has had it since 2.6, so this default is what that
+ * architecture sees; arm64 hosts older than 5.3 flip it to 0.
+ */
+int have_ptrace_sysemu = 1;
 
 /**
  * start_userspace() - prepare a new userspace process
@@ -504,6 +583,30 @@ out_close:
 
 static int unscheduled_userspace_iterations;
 extern unsigned long tt_extra_sched_jiffies;
+
+#ifdef UM_SYSCALL_TRAP_INSN
+/*
+ * Is the guest about to execute the instruction that enters the kernel?
+ *
+ * Only consulted while single-stepping a guest on a host without
+ * PTRACE_SYSEMU, which is a debugger path, so the extra ptrace call per step
+ * costs nothing that matters. A failed read is reported as "not a syscall":
+ * the instruction is about to be executed by the guest either way, and if it
+ * is unreadable the single-step will fault on it and be reported normally,
+ * which is a better outcome than refusing to step.
+ */
+static int at_syscall_insn(int pid, unsigned long pc)
+{
+	long word;
+
+	errno = 0;
+	word = ptrace(PTRACE_PEEKTEXT, pid, (void *)pc, 0);
+	if (word == -1 && errno)
+		return 0;
+
+	return (unsigned int)word == UM_SYSCALL_TRAP_INSN;
+}
+#endif
 
 void userspace(struct uml_pt_regs *regs)
 {
@@ -640,10 +743,33 @@ void userspace(struct uml_pt_regs *regs)
 				fatal_sigsegv();
 			}
 
-			if (singlestepping())
+			/*
+			 * Without PTRACE_SYSEMU the guest is run under plain
+			 * PTRACE_SYSCALL and the syscall is cancelled at the
+			 * entry stop below, which reaches the same place: the
+			 * call does not execute and the guest resumes past it
+			 * with whatever UML puts in the return register.
+			 */
+			if (!have_ptrace_sysemu) {
+				op = PTRACE_SYSCALL;
+#ifdef UM_SYSCALL_TRAP_INSN
+				/*
+				 * Single-stepping still has to step. The one
+				 * instruction that must not be stepped is the
+				 * one that enters the kernel: stepping it would
+				 * run the guest's syscall on the host. Take the
+				 * syscall stop for that instruction instead, so
+				 * it can be cancelled like any other.
+				 */
+				if (singlestepping() &&
+				    !at_syscall_insn(pid, REGS_IP(regs->gp)))
+					op = PTRACE_SINGLESTEP;
+#endif
+			} else if (singlestepping()) {
 				op = PTRACE_SYSEMU_SINGLESTEP;
-			else
+			} else {
 				op = PTRACE_SYSEMU;
+			}
 
 			if (ptrace(op, pid, 0, 0)) {
 				printk(UM_KERN_ERR "%s - ptrace continue failed, op = %d, errno = %d\n",
@@ -700,6 +826,22 @@ void userspace(struct uml_pt_regs *regs)
 			    WSTOPSIG(status) == (SIGTRAP | 0x80)) {
 				unsigned long hidden[MAX_REG_NR];
 				int sstatus, tries = 0;
+
+				/*
+				 * On a host without PTRACE_SYSEMU this stop is
+				 * an ordinary syscall-entry stop, so the call
+				 * is about to run for real. Cancel it before
+				 * stepping off the stop. The registers were
+				 * read above, so the syscall number UML needs
+				 * has already been taken and overwriting it
+				 * here loses nothing.
+				 */
+				if (!have_ptrace_sysemu &&
+				    ptrace_set_syscall_nr(pid, -1)) {
+					printk(UM_KERN_ERR "%s - failed to cancel a guest syscall, errno = %d\n",
+					       __func__, errno);
+					fatal_sigsegv();
+				}
 
 				while (1) {
 					if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0)) {

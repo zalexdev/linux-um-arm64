@@ -23,3 +23,50 @@ CHECKFLAGS	+= -D__aarch64__
 # -mgeneral-regs-only would break the host-side code that legitimately does.
 
 LINK-$(CONFIG_LD_SCRIPT_DYN_RPATH) += -Wl,-rpath,/lib
+
+# Building against bionic (the Android NDK) collides with the kernel's own
+# definitions of a set of standard-library names. glibc does not show this:
+# its libc.a is finely split, so the objects carrying memcpy, snprintf and the
+# rest are simply never pulled in once the kernel's definitions satisfy every
+# reference. bionic's libc.a is coarser -- the objects that *are* needed also
+# define these -- and the static link then fails with twenty duplicate symbols.
+#
+# Resolving it with --allow-multiple-definition is worse than not building:
+# link order puts the kernel first, so libc's internals end up calling the
+# kernel's memcpy and sem_init, and the binary segfaults before main().
+#
+# The string family is handled in arch/arm64/um/asm/string.h instead, by
+# declaring __HAVE_ARCH_* so lib/string.c does not compile its own -- renaming
+# those fights CONFIG_FORTIFY_SOURCE, which redefines them as macros.
+#
+# The rest are renamed, which is exactly what UML already does for
+# errno, sigprocmask, mktime and strrchr in arch/um/Makefile. These defines
+# reach kernel objects only, never USER_OBJS, so host-side code and libc keep
+# the real names. Compiler-emitted implicit calls (struct copies lowering to
+# memcpy) also keep the real name and get libc's implementation, which is
+# correct and usually faster than the kernel's generic C.
+#
+# The list is not guesswork and not the duplicate-symbol errors either. Those
+# only catch names both sides *define*; the dangerous case is a name libc
+# merely *references* while the kernel defines it, because then there is no
+# error at all -- the reference simply binds to the kernel's function. That is
+# what happened with sched_getaffinity: bionic's startup called it, got the
+# kernel's, and dereferenced a task_struct that does not exist yet. The symptom
+# was a SIGSEGV writing to 0x80 with no output.
+#
+# So the list is the intersection of "undefined in bionic's libc.a" with
+# "defined in vmlinux.a", computed with llvm-nm:
+#
+#   llvm-nm --undefined-only libc.a         | sort -u > A
+#   llvm-nm --defined-only --extern-only vmlinux.a | sort -u > B
+#   comm -12 A B
+#
+# Detected from the compiler rather than configured, because the whole
+# difference is which libc the target triple selects.
+UM_BIONIC := $(shell echo | $(CC) $(CLANG_FLAGS) -dM -E - 2>/dev/null | grep -c __ANDROID__)
+
+ifeq ($(UM_BIONIC),1)
+# Renamed on the object files at link time, not here: see
+# arch/arm64/um/bionic-syms.redef for the list and for why -D is the wrong tool.
+export UM_REDEF_SYMS := $(srctree)/arch/arm64/um/bionic-syms.redef
+endif
