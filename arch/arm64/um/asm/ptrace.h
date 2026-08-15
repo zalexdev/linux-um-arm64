@@ -11,6 +11,7 @@
 enum {
 	REGSET_GENERAL,
 	REGSET_FP,
+	REGSET_SYSTEM_CALL,
 };
 
 #include <linux/compiler.h>

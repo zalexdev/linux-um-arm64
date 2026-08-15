@@ -152,6 +152,46 @@ static int fpregs_set(struct task_struct *target,
 				  fpregs, 0, regset->size * regset->n);
 }
 
+/*
+ * NT_ARM_SYSTEM_CALL, without which a guest tracer cannot see or change the
+ * syscall number at all.
+ *
+ * On arm64 the number is not part of the general register set -- x8 holds it on
+ * entry but is not authoritative, and there is no orig_x8 -- so this regset is
+ * the only interface for it. That makes it not an optional extra: without it,
+ * PTRACE_GETREGSET(NT_ARM_SYSTEM_CALL) fails outright, and a tracer has no way
+ * to name the syscall it is stopped in, or to cancel one by writing -1, which
+ * is how every arm64 ptrace sandbox blocks a call.
+ *
+ * The storage is uml_pt_regs.syscall, which handle_syscall() fills before
+ * calling the tracehooks and re-reads afterwards -- so a write here really does
+ * redirect or cancel the syscall, as it does on real hardware.
+ */
+static int system_call_get(struct task_struct *target,
+			   const struct user_regset *regset,
+			   struct membuf to)
+{
+	int syscallno = PT_REGS_SYSCALL_NR(task_pt_regs(target));
+
+	return membuf_store(&to, syscallno);
+}
+
+static int system_call_set(struct task_struct *target,
+			   const struct user_regset *regset,
+			   unsigned int pos, unsigned int count,
+			   const void *kbuf, const void __user *ubuf)
+{
+	int syscallno = PT_REGS_SYSCALL_NR(task_pt_regs(target));
+	int ret;
+
+	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, &syscallno, 0, -1);
+	if (ret)
+		return ret;
+
+	PT_REGS_SYSCALL_NR(task_pt_regs(target)) = syscallno;
+	return 0;
+}
+
 static struct user_regset uml_regsets[] __ro_after_init = {
 	[REGSET_GENERAL] = {
 		USER_REGSET_NOTE_TYPE(PRSTATUS),
@@ -173,6 +213,14 @@ static struct user_regset uml_regsets[] __ro_after_init = {
 		.active		= fpregs_active,
 		.regset_get	= fpregs_get,
 		.set		= fpregs_set,
+	},
+	[REGSET_SYSTEM_CALL] = {
+		USER_REGSET_NOTE_TYPE(ARM_SYSTEM_CALL),
+		.n		= 1,
+		.size		= sizeof(int),
+		.align		= sizeof(int),
+		.regset_get	= system_call_get,
+		.set		= system_call_set,
 	},
 };
 
