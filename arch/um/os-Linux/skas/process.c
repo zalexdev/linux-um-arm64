@@ -699,29 +699,48 @@ void userspace(struct uml_pt_regs *regs)
 			if (WIFSTOPPED(status) &&
 			    WSTOPSIG(status) == (SIGTRAP | 0x80)) {
 				unsigned long hidden[MAX_REG_NR];
-				int sstatus;
+				int sstatus, tries = 0;
 
-				if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0)) {
-					printk(UM_KERN_ERR "%s - failed to step off a syscall stop, errno = %d\n",
-					       __func__, errno);
-					fatal_sigsegv();
-				}
+				while (1) {
+					if (ptrace(PTRACE_SINGLESTEP, pid, 0, 0)) {
+						printk(UM_KERN_ERR "%s - failed to step off a syscall stop, errno = %d\n",
+						       __func__, errno);
+						fatal_sigsegv();
+					}
 
-				CATCH_EINTR(err = waitpid(pid, &sstatus,
-							  WUNTRACED | __WALL));
-				if (err < 0) {
-					printk(UM_KERN_ERR "%s - wait after step failed, errno = %d\n",
-					       __func__, errno);
-					fatal_sigsegv();
-				}
+					CATCH_EINTR(err = waitpid(pid, &sstatus,
+								  WUNTRACED | __WALL));
+					if (err < 0) {
+						printk(UM_KERN_ERR "%s - wait after step failed, errno = %d\n",
+						       __func__, errno);
+						fatal_sigsegv();
+					}
 
-				/*
-				 * Anything else means the assumption above no
-				 * longer holds. Fail loudly rather than run a
-				 * guest on registers that are quietly wrong.
-				 */
-				if (!WIFSTOPPED(sstatus) ||
-				    WSTOPSIG(sstatus) != SIGTRAP) {
+					if (WIFSTOPPED(sstatus) &&
+					    WSTOPSIG(sstatus) == SIGTRAP)
+						break;
+
+					/*
+					 * The stub can be interrupted here, and
+					 * wait_stub_done() tolerates the same two
+					 * signals for the same reason. Neither is
+					 * for the guest -- the stub installs no
+					 * handler for either in ptrace mode, so
+					 * delivering one would kill it -- and the
+					 * step has not happened yet, so drop the
+					 * signal and step again.
+					 */
+					if (WIFSTOPPED(sstatus) &&
+					    ((1 << WSTOPSIG(sstatus)) & STUB_SIG_MASK) &&
+					    ++tries < 16)
+						continue;
+
+					/*
+					 * Anything else means the assumption
+					 * above no longer holds. Fail loudly
+					 * rather than run a guest on registers
+					 * that are quietly wrong.
+					 */
 					printk(UM_KERN_ERR "%s - unexpected status 0x%x stepping off a syscall stop\n",
 					       __func__, sstatus);
 					fatal_sigsegv();
