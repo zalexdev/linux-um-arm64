@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/time.h>
+/* CLOCK_REALTIME for the raw clock_nanosleep() in the seccomp probe below. */
 #include <time.h>
 #include <sys/resource.h>
 #include <asm/unistd.h>

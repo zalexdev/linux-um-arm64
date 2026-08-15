@@ -139,9 +139,24 @@ static irqreturn_t mm_sigchld_irq(int irq, void* dev)
 
 				stub_data = (void *)mm_context->id.stack;
 				stub_data->futex = FUTEX_IN_KERN;
-#if IS_ENABLED(CONFIG_SMP)
+				/*
+				 * Unconditional on purpose -- the waiter-bit
+				 * wake elision must never be used on this
+				 * path. The waiter can be anywhere between
+				 * spinning and parking, and a dead stub will
+				 * never issue another handoff to correct a
+				 * skipped wake: a spurious FUTEX_WAKE here is
+				 * noise, a missed one is a task hung forever.
+				 * The plain store can race with the waiter's
+				 * fetch_or of its waiter bit; that is fine,
+				 * because FUTEX_WAIT revalidates the value it
+				 * was passed and this wake always fires. The
+				 * syscall also carries the barrier the plain
+				 * store lacks. (This was SMP-only before the
+				 * spin existed; now the wake is the one kick
+				 * that works no matter where the waiter is.)
+				 */
 				os_futex_wake(&stub_data->futex);
-#endif
 
 				/*
 				 * NOTE: Currently executing syscalls by
@@ -158,6 +173,20 @@ static irqreturn_t mm_sigchld_irq(int irq, void* dev)
 static int __init init_child_tracking(void)
 {
 	int err;
+
+	/*
+	 * The handoff word must own its cacheline outright: both sides poll
+	 * it, and a field the peer writes sharing the line would turn the
+	 * spin in stub-futex.h into a stream of coherence misses. Assert the
+	 * layout so a reorder of struct stub_data cannot quietly regress
+	 * this -- it would still be correct, just slow in a way nothing
+	 * functional would ever catch.
+	 */
+	BUILD_BUG_ON(offsetof(struct stub_data, futex) % STUB_FUTEX_ALIGN != 0);
+	BUILD_BUG_ON(offsetofend(struct stub_data, syscall_data_len) >
+		     offsetof(struct stub_data, futex));
+	BUILD_BUG_ON(offsetof(struct stub_data, syscall_data) <
+		     offsetof(struct stub_data, futex) + STUB_FUTEX_ALIGN);
 
 	spin_lock_init(&mm_list_lock);
 	INIT_LIST_HEAD(&mm_list);

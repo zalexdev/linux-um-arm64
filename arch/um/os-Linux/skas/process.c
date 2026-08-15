@@ -28,6 +28,7 @@
 #include <registers.h>
 #include <skas.h>
 #include <sysdep/stub.h>
+#include <stub-futex.h>
 #include <sysdep/mcontext.h>
 #include <linux/futex.h>
 #include <linux/threads.h>
@@ -118,9 +119,49 @@ bad_wait:
 	fatal_sigsegv();
 }
 
+/*
+ * How long each side may busy-poll the handoff word before parking, in
+ * microseconds. The measured 22 us seccomp syscall round trip is mostly
+ * handoff overhead around a few microseconds of actual work, so 10 us covers
+ * the reply for the syscalls that matter while capping what a miss can burn
+ * at roughly the cost of the futex sleep it tried to avoid. The hit-streak
+ * accounting (see stub-futex.h) keeps an idle or compute-bound guest from
+ * paying even that on every wait.
+ */
+#define SECCOMP_SPIN_DEFAULT_US 10
+
+static unsigned long seccomp_spin_us = SECCOMP_SPIN_DEFAULT_US;
+
+static int __init uml_seccomp_spin_setup(char *line, int *add)
+{
+	*add = 0;
+	seccomp_spin_us = strtoul(line, NULL, 0);
+
+	/*
+	 * Anything beyond a scheduling quantum defeats the purpose and risks
+	 * the budget arithmetic overflowing spin_ticks; clamp, don't reject.
+	 */
+	if (seccomp_spin_us > 100000)
+		seccomp_spin_us = 100000;
+
+	return 0;
+}
+
+__uml_setup("seccomp_spin=", uml_seccomp_spin_setup,
+"seccomp_spin=<microseconds>\n"
+"    In SECCOMP mode, busy-poll the stub<->kernel handoff word this long\n"
+"    before sleeping in FUTEX_WAIT, so a fast peer is observed without the\n"
+"    futex syscalls and the context switch they cost. Bounded by wall time\n"
+"    (the constant-rate architected counter), not iterations, so it means\n"
+"    the same thing at every CPU frequency. An adaptive hit-streak stops\n"
+"    the polling when the peer keeps being slow. 0 disables polling.\n"
+"    Default: 10 (SECCOMP_SPIN_DEFAULT_US).\n\n");
+
 void wait_stub_done_seccomp(struct mm_id *mm_idp, int running, int wait_sigsys)
 {
 	struct stub_data *data = (void *)mm_idp->stack;
+	unsigned long budget;
+	unsigned int futex_val;
 	int ret;
 
 	do {
@@ -158,12 +199,43 @@ void wait_stub_done_seccomp(struct mm_id *mm_idp, int running, int wait_sigsys)
 			}
 
 			data->signal = 0;
-			data->futex = FUTEX_IN_CHILD;
-			CATCH_EINTR(syscall(__NR_futex, &data->futex,
-					    FUTEX_WAKE, 1, NULL, NULL, 0));
+			/*
+			 * The exchange's release ordering publishes signal and
+			 * syscall_data before the stub can observe the flip;
+			 * the returned old value elides the FUTEX_WAKE when
+			 * the stub's spin caught the reply and never parked.
+			 */
+			if (stub_futex_hand_over(&data->futex, FUTEX_IN_CHILD))
+				CATCH_EINTR(syscall(__NR_futex, &data->futex,
+						    FUTEX_WAKE, 1, NULL, NULL, 0));
 		}
 
-		do {
+		/*
+		 * A stub that answers within the budget is observed by the
+		 * spin without ever entering FUTEX_WAIT. A dead child cannot
+		 * flip the word, so the spin can only cost its bounded budget
+		 * before the PID checks below run as they always did.
+		 */
+		budget = stub_futex_spin_budget(&data->kern_spin,
+						data->spin_ticks);
+		futex_val = stub_futex_spin(&data->futex, FUTEX_IN_CHILD,
+					    budget);
+		if (budget)
+			stub_futex_spin_result(&data->kern_spin,
+					       STUB_FUTEX_OWNER(futex_val) == FUTEX_IN_KERN);
+
+		/*
+		 * Going to sleep: advertise it via the waiter bit so the
+		 * stub's handoff knows to send a wake. The fetch_or returns
+		 * the old value, so a flip that happened since the spin gave
+		 * up is seen here and skips the wait entirely.
+		 */
+		if (STUB_FUTEX_OWNER(futex_val) == FUTEX_IN_CHILD)
+			futex_val = stub_futex_fetch_or(&data->futex,
+							STUB_FUTEX_WAITER) |
+				STUB_FUTEX_WAITER;
+
+		while (STUB_FUTEX_OWNER(futex_val) == FUTEX_IN_CHILD) {
 			/*
 			 * We need to check whether the child is still alive
 			 * before and after the FUTEX_WAIT call. Before, in
@@ -178,15 +250,25 @@ void wait_stub_done_seccomp(struct mm_id *mm_idp, int running, int wait_sigsys)
 			if (__READ_ONCE(mm_idp->pid) < 0)
 				goto out_kill;
 
+			/*
+			 * The expected value is the freshly observed one, not
+			 * the constant: if the stub (or the death path in
+			 * mm_sigchld_irq) flipped the word between the read
+			 * and this call, FUTEX_WAIT returns EAGAIN instead of
+			 * sleeping through the wake, and the acquire re-read
+			 * below picks the flip up.
+			 */
 			ret = syscall(__NR_futex, &data->futex,
-				      FUTEX_WAIT, FUTEX_IN_CHILD,
+				      FUTEX_WAIT, futex_val,
 				      NULL, NULL, 0);
 			if (ret < 0 && errno != EINTR && errno != EAGAIN) {
 				printk(UM_KERN_ERR "%s : FUTEX_WAIT failed, errno = %d\n",
 				       __func__, errno);
 				goto out_kill;
 			}
-		} while (data->futex == FUTEX_IN_CHILD);
+
+			futex_val = stub_futex_load_acquire(&data->futex);
+		}
 
 		if (__READ_ONCE(mm_idp->pid) < 0)
 			goto out_kill;
@@ -513,8 +595,18 @@ int start_userspace(struct mm_id *mm_id)
 		return err;
 	}
 
-	if (using_seccomp)
+	if (using_seccomp) {
 		proc_data->futex = FUTEX_IN_CHILD;
+		/*
+		 * Convert the microsecond budget into counter ticks once per
+		 * stub, before it first runs; the stub cannot compute this
+		 * itself without re-reading the counter frequency on every
+		 * trap. stub_cycles_per_us() is 0 where no constant-rate EL0
+		 * counter is available (x86), which disables the spin but
+		 * keeps the waiter-bit protocol.
+		 */
+		proc_data->spin_ticks = seccomp_spin_us * stub_cycles_per_us();
+	}
 
 	mm_id->pid = clone(userspace_tramp, (void *) sp,
 		    CLONE_VFORK | CLONE_VM | SIGCHLD,

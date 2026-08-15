@@ -4,6 +4,7 @@
  */
 
 #include <sysdep/stub.h>
+#include <stub-futex.h>
 
 #include <linux/futex.h>
 #include <sys/socket.h>
@@ -112,6 +113,8 @@ stub_signal_interrupt(int sig, siginfo_t *info, void *p)
 	struct cmsghdr *fd_msg;
 	int *fd_map;
 	int num_fds;
+	unsigned long budget;
+	unsigned int futex_val;
 	long res;
 
 	d->signal = sig;
@@ -122,19 +125,59 @@ stub_signal_interrupt(int sig, siginfo_t *info, void *p)
 	stub_seccomp_save_state(&d->arch_data);
 
 restart_wait:
-	d->futex = FUTEX_IN_KERN;
-	do {
-		res = stub_syscall3(__NR_futex, (unsigned long)&d->futex,
-				    FUTEX_WAKE, 1);
-	} while (res == -EINTR);
+	/*
+	 * Hand the word to the kernel. The exchange's release ordering
+	 * publishes everything written above (signal, offsets, arch state)
+	 * before the kernel can observe the flip, and its return value says
+	 * whether the kernel actually parked -- only then does FUTEX_WAKE buy
+	 * anything. When the kernel-side spin caught the flip, the wake it
+	 * elides here is the syscall plus the voluntary context switch that
+	 * dominates the measured handoff cost.
+	 */
+	if (stub_futex_hand_over(&d->futex, FUTEX_IN_KERN)) {
+		do {
+			res = stub_syscall3(__NR_futex, (unsigned long)&d->futex,
+					    FUTEX_WAKE, 1);
+		} while (res == -EINTR);
+	}
 
-	do {
-		res = stub_syscall4(__NR_futex, (unsigned long)&d->futex,
-				    FUTEX_WAIT, FUTEX_IN_KERN, 0);
-	} while (res == -EINTR || d->futex == FUTEX_IN_KERN);
+	/*
+	 * Wait for the kernel's reply: spin within the budget first, so a fast
+	 * reply is observed without ever entering FUTEX_WAIT.
+	 */
+	budget = stub_futex_spin_budget(&d->stub_spin, d->spin_ticks);
+	futex_val = stub_futex_spin(&d->futex, FUTEX_IN_KERN, budget);
+	if (budget)
+		stub_futex_spin_result(&d->stub_spin,
+				       STUB_FUTEX_OWNER(futex_val) == FUTEX_IN_CHILD);
 
-	if (res < 0 && res != -EAGAIN)
-		stub_syscall1(__NR_exit_group, 1);
+	if (STUB_FUTEX_OWNER(futex_val) == FUTEX_IN_KERN) {
+		/*
+		 * Going to sleep: advertise it, so the kernel's handoff knows
+		 * a wake is needed. If the reply slipped in between the spin
+		 * and this fetch_or, the returned old value shows the flip
+		 * and the wait is skipped entirely.
+		 */
+		futex_val = stub_futex_fetch_or(&d->futex, STUB_FUTEX_WAITER) |
+			STUB_FUTEX_WAITER;
+
+		while (STUB_FUTEX_OWNER(futex_val) == FUTEX_IN_KERN) {
+			/*
+			 * The expected value passed to FUTEX_WAIT is the one
+			 * just observed, re-read after the fetch_or and after
+			 * every wakeup. This is what makes a wake landing
+			 * between the spin and the wait impossible to lose:
+			 * if the word changed since the read, FUTEX_WAIT
+			 * refuses with EAGAIN instead of sleeping through it.
+			 */
+			res = stub_syscall4(__NR_futex, (unsigned long)&d->futex,
+					    FUTEX_WAIT, futex_val, 0);
+			if (res < 0 && res != -EINTR && res != -EAGAIN)
+				stub_syscall1(__NR_exit_group, 1);
+
+			futex_val = stub_futex_load_acquire(&d->futex);
+		}
+	}
 
 	if (d->syscall_data_len) {
 		/* Read passed FDs (if any) */
