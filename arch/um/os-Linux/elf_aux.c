@@ -53,8 +53,10 @@ long elf_aux_hwcap2;
  * from this number rather than from a measurement taken on one machine; see
  * check_stub_sigstack().
  *
- * Zero if the host does not publish it, which is the pre-5.5 case and also
- * everything that is not arm64.
+ * Zero if the host does not publish it. arm64 has since v5.5, and x86 since
+ * v5.16 (get_sigframe_size(), which grows with XSAVE state much as arm64's
+ * grows with the vector length), so on the hosts UML actually runs on this is
+ * usually populated.
  */
 long elf_aux_min_sigstack;
 

@@ -6,7 +6,13 @@ config UML_ARM64
 	select ARCH_USE_QUEUED_RWLOCKS
 	select ARCH_USE_QUEUED_SPINLOCKS
 	select HAVE_EFFICIENT_UNALIGNED_ACCESS
-	select MODULES_USE_ELF_RELA
+	#
+	# MODULES_USE_ELF_RELA is deliberately NOT selected yet. aarch64 modules
+	# are indeed RELA, but nothing here implements apply_relocate_add(), so
+	# selecting it would assert a capability that does not exist. CONFIG_MODULES
+	# is off in the defconfig; allmodconfig and randconfig will not link until
+	# module support lands, and that is honest rather than hidden.
+	#
 	#
 	# The guest's syscall ABI must match what aarch64 userspace was built
 	# against, and that is decided here rather than by arch/arm64/Kconfig,

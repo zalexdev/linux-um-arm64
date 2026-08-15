@@ -30,9 +30,9 @@
  * ends. ptrace_save_reg() in arch/arm64/kernel/ptrace.c spells out the
  * consequences: writes by the tracer to that register during the stop are
  * discarded, and the real value is not available while stopped. Confirmed
- * against a live 6.12 host by harness/probe/hostx7.c: x7 reads back as 0
- * (PTRACE_SYSCALL_ENTER) rather than the value the tracee put there, and a write
- * of 0xdeadbeef is gone by the next stop.
+ * against a live 6.12 host: x7 reads back as 0 (PTRACE_SYSCALL_ENTER) rather
+ * than the value the tracee put there, and a write of 0xdeadbeef is gone by the
+ * next stop.
  *
  * x86 has no equivalent, so nothing in UML expected it, and the result was a
  * guest-visible data corruption rather than a missing feature. Every thread of a
@@ -43,8 +43,8 @@
  * base, in the case that found this, so dpkg-deb faulted at what was really a
  * dictionary offset.
  *
- * The escape, measured by harness/probe/hostx7b.c: resuming a PTRACE_SYSEMU
- * entry stop with PTRACE_SINGLESTEP lands on a pseudo-step SIGTRAP where the
+ * The escape, measured the same way: resuming a PTRACE_SYSEMU entry stop with
+ * PTRACE_SINGLESTEP lands on a pseudo-step SIGTRAP where the
  * register is both readable and writable, without executing a single guest
  * instruction -- the syscall stays emulated away and the program counter does
  * not move. See userspace() in arch/um/os-Linux/skas/process.c.

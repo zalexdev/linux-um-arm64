@@ -427,16 +427,24 @@ static bool __init init_seccomp(void)
 	 * and "UML's own probe is broken" -- which is how a fixable bug in the
 	 * probe turned into SECCOMP mode simply never being available.
 	 */
+	/*
+	 * Exit 3 is the one that means "this host does not do seccomp", because
+	 * it is SECCOMP_SET_MODE_FILTER that refused. Exit 2 is sigaction()
+	 * failing, which says nothing about seccomp and everything about the
+	 * probe. Labelling them the other way round -- as this did, following
+	 * the single "missing" the code had before -- points the reader at the
+	 * host when the bug is here.
+	 */
 	if (WIFEXITED(status)) {
 		switch (WEXITSTATUS(status)) {
 		case 1:
 			os_info("no close_range\n");
 			break;
 		case 2:
-			os_info("missing\n");
+			os_info("cannot catch SIGSYS\n");
 			break;
 		case 3:
-			os_info("filter rejected\n");
+			os_info("missing\n");
 			break;
 		case 4:
 			os_info("filter did not trap\n");
@@ -590,9 +598,41 @@ static void __init check_stub_sigstack(void)
 			" -- SMALLER than this host's worst case" : "");
 }
 
+/*
+ * A guest page is a host mmap(), so the guest's page size cannot be smaller
+ * than the host's: mmap() rejects a length or offset that is not a multiple of
+ * the host's granularity, and UML has nothing to fall back on.
+ *
+ * Getting this wrong is not a subtle failure, but it is a silent one. A UML
+ * built with 4 KB pages on a 16 KB host stops dead just after the ptrace
+ * capability checks, with no message, because the first thing it does
+ * afterwards is map the stub. That is a live configuration and not a corner
+ * case: Android 15 and later ship 16 KB kernels, arm64 servers ship 4 KB, and
+ * the default here is 4 KB -- so the first person to run this on a modern phone
+ * gets a hang and no clue.
+ *
+ * The other direction is fine and needs no check: a 16 KB guest on a 4 KB host
+ * simply uses four host pages per guest page.
+ */
+static void __init check_page_size(void)
+{
+	unsigned long host = getpagesize();
+
+	if (host <= UM_KERN_PAGE_SIZE)
+		return;
+
+	fatal("Host page size is %lu bytes but this kernel was built for %lu.\n"
+	      "A guest page is a host mmap(), so it cannot be smaller than the\n"
+	      "host's page size. Rebuild with CONFIG_PAGE_SIZE_%luKB.\n",
+	      host, (unsigned long)UM_KERN_PAGE_SIZE, host / 1024);
+}
+
 void __init os_early_checks(void)
 {
 	int pid;
+
+	/* Nothing below can work if this is wrong, so check it before anything */
+	check_page_size();
 
 	/* Print out the core dump limits early */
 	check_coredump_limit();
