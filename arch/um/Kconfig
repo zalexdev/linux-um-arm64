@@ -51,7 +51,14 @@ config MMU
 	default y
 
 config UML_DMA_EMULATION
-	bool
+	bool "Emulate the DMA API"
+	help
+	  Provide the DMA API on top of ordinary memory, for driver stacks that
+	  require it. UML has no bus and no device doing real transfers, so this
+	  is bookkeeping rather than emulation of anything.
+
+	  Say Y if you need a subsystem that depends on HAS_DMA. It is selected
+	  automatically by UML_PCI.
 
 config NO_IOMEM
 	bool "disable IOMEM" if EXPERT
@@ -59,9 +66,19 @@ config NO_IOMEM
 	default y
 
 config UML_IOMEM_EMULATION
-	bool
+	bool "Emulate MMIO accessors"
 	select INDIRECT_IOMEM
 	select GENERIC_PCI_IOMAP
+	help
+	  Provide readl()/writel() and friends, so subsystems that depend on
+	  HAS_IOMEM can be built.
+
+	  This was reachable only as a side effect of enabling UML_PCI, which
+	  meant that anything wanting HAS_IOMEM had to drag in a PCI bus it did
+	  not use -- USB/IP's virtual host controller, for instance, needs
+	  HAS_IOMEM through usbcore but touches neither MMIO nor PCI, and
+	  enabling UML_PCI to reach it warns at boot that no virtio device ID
+	  is configured. Say Y to get the accessors on their own.
 
 config ISA
 	bool
