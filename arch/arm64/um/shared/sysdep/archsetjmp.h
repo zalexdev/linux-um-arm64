@@ -50,4 +50,22 @@ unsigned long get_thread_reg(int reg, jmp_buf *buf);
 #define JB_IP __x30
 #define JB_SP __sp
 
+/*
+ * Bytes to leave below the top of a fresh kernel stack: none.
+ *
+ * x86 reserves one word to emulate the return address `call` pushes, so the
+ * callee sees the alignment its ABI expects. aarch64 has no pushed return
+ * address -- the link register carries it -- and AAPCS64 requires SP to be
+ * 16-byte aligned at *all* times, not merely after a prologue. Reserving 8
+ * bytes leaves every kernel thread running on a stack that is 8 mod 16, which
+ * is not cosmetic: the compiler derives alignment facts from it.
+ *
+ * Observed symptom: in lib/tests/list-test.c clang computes &entries[0].list as
+ * "orr x10, x10, #8" rather than an add, which is valid only because it can
+ * prove bit 3 of the address is clear. With a misaligned SP the OR is a no-op,
+ * the list entries are built at the wrong offsets, and list_for_each_entry()
+ * reads a stack address where a counter should be.
+ */
+#define ARCH_INIT_SP_RESERVE	0
+
 #endif /* _KLIBC_ARCHSETJMP_H */
