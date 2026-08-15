@@ -1,3 +1,18 @@
+#
+# 16 KB pages by default.
+#
+# A guest page is a host mmap(), so the guest's page size cannot be smaller than
+# the host's -- a 4 KB guest simply cannot boot on a 16 KB host, and does so by
+# hanging rather than by failing. A 16 KB guest runs on both: four host pages
+# per guest page on a 4 KB host, one-to-one on a 16 KB one.
+#
+# So 16 KB is the only setting that covers the whole fleet, and Android 15 and
+# later ship 16 KB kernels. The cost is internal fragmentation on 4 KB devices,
+# a few percent of memory; the alternative costs not booting at all on current
+# hardware. CONFIG_PAGE_SIZE_4KB remains available for memory-constrained
+# builds that know their host.
+#
+CONFIG_PAGE_SIZE_16KB=y
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_RD_GZIP=y
 CONFIG_RD_XZ=y
