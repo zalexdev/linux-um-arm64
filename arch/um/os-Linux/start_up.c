@@ -434,6 +434,53 @@ static void __init check_sysemu(void)
 	      "intercept guest syscalls without one of them.\n");
 }
 
+/*
+ * Is the cycle counter the stub's adaptive spin is budgeted against readable?
+ *
+ * On arm64 that is CNTVCT_EL0/CNTFRQ_EL0, and userspace may only read them when
+ * CNTKCTL_EL1.EL0VCTEN is set. Linux sets it because its own vDSO needs it --
+ * but that is a statement about Linux, not about the host actually underneath
+ * us, which may be an emulator or a hypervisor that traps the register. Getting
+ * it wrong costs a SIGILL raised inside the stub, where nothing is listening
+ * and the boot dies with no message naming the instruction.
+ *
+ * A child pays for the answer, so an illegal instruction costs one process
+ * rather than the boot. A host without one simply does not spin.
+ */
+static void __init check_stub_cycles(void)
+{
+	int pid, n, status;
+
+	os_info("Checking the stub's cycle counter...");
+
+	pid = fork();
+	if (pid == 0) {
+		/* Both are read on the hot path; probe both. */
+		if (!stub_cycles_per_us())
+			_exit(1);
+		stub_cycles();
+		_exit(0);
+	}
+	if (pid < 0)
+		fatal_perror("check_stub_cycles: fork failed");
+
+	CATCH_EINTR(n = waitpid(pid, &status, 0));
+	if (n < 0)
+		fatal_perror("check_stub_cycles: wait failed");
+
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		have_stub_cycles = 1;
+		os_info("OK\n");
+		return;
+	}
+
+	if (WIFSIGNALED(status))
+		os_info("unreadable (signal %d); stub spin disabled\n",
+			WTERMSIG(status));
+	else
+		os_info("no usable rate; stub spin disabled\n");
+}
+
 static void __init check_ptrace(void)
 {
 	int pid, n, status;
@@ -912,6 +959,12 @@ void __init os_early_checks(void)
 	 * kernel is running.
 	 */
 	check_tmpexec();
+
+	/*
+	 * Before either mode is chosen: the spin this gates belongs to SECCOMP
+	 * mode, and that path returns below without reaching check_ptrace().
+	 */
+	check_stub_cycles();
 
 	if (seccomp_config) {
 		if (init_seccomp()) {

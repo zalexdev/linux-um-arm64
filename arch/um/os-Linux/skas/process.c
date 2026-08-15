@@ -551,6 +551,7 @@ int using_seccomp;
  */
 int have_ptrace_sysemu = 1;
 int syscall_cancel_nr = -1;
+int have_stub_cycles;
 
 /**
  * start_userspace() - prepare a new userspace process
@@ -605,7 +606,13 @@ int start_userspace(struct mm_id *mm_id)
 		 * counter is available (x86), which disables the spin but
 		 * keeps the waiter-bit protocol.
 		 */
-		proc_data->spin_ticks = seccomp_spin_us * stub_cycles_per_us();
+		/*
+	 * No usable cycle counter means no bounded spin: the budget would be
+	 * meaningless and the register read is not even guaranteed to be legal.
+	 * See check_stub_cycles().
+	 */
+	proc_data->spin_ticks = have_stub_cycles ?
+		seccomp_spin_us * stub_cycles_per_us() : 0;
 	}
 
 	mm_id->pid = clone(userspace_tramp, (void *) sp,
