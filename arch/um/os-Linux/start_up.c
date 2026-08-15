@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/resource.h>
 #include <asm/unistd.h>
 #include <init.h>
@@ -547,7 +548,27 @@ static int __init seccomp_helper(void *data)
 			SECCOMP_FILTER_FLAG_TSYNC, &prog) != 0)
 		exit(3);
 
-	sleep(0);
+	/*
+	 * Issue the filtered call directly rather than through libc.
+	 *
+	 * This was sleep(0), and what libc does with that is libc's business:
+	 * bionic answers a zero timeout from userspace and never enters the
+	 * kernel, so nothing reached the filter and the probe concluded the host
+	 * could not trap -- reporting a working seccomp implementation as
+	 * missing and dropping UML onto the ptrace path, which costs about four
+	 * times as much per guest syscall. glibc happens to make the call, which
+	 * is the only reason this ever worked.
+	 *
+	 * A probe for "does this filter trap" has no business going through a
+	 * libc wrapper at all; close_range above is already issued raw for the
+	 * same reason.
+	 */
+	{
+		struct timespec ts = { 0, 0 };
+
+		stub_syscall4(__NR_clock_nanosleep, CLOCK_REALTIME, 0,
+			      (long) &ts, 0);
+	}
 
 	/* Never reached. */
 	_exit(4);
