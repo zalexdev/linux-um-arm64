@@ -549,12 +549,55 @@ __uml_setup("seccomp=", uml_seccomp_config,
 "    This is insecure and should only be used with a trusted userspace\n\n"
 );
 
+extern long elf_aux_min_sigstack;
+
+/*
+ * Report, and sanity-check, the size of the alternate signal stack the stub
+ * gets against what this host says a signal frame can need.
+ *
+ * The stub takes its signals on an alternate stack that is part of struct
+ * stub_data, whose size is fixed at compile time. The frame written there is
+ * built by the host from the host's CPU features and from what the guest has
+ * executed inside the stub -- neither of which UML chooses. On arm64 the same
+ * kernel reports AT_MINSIGSTKSZ of 4720 on one CPU model and 9984 on another,
+ * so a compile-time size taken from a measurement on one machine is not a
+ * design, it is a coincidence waiting to end.
+ *
+ * This does not refuse to boot when the area is smaller than AT_MINSIGSTKSZ,
+ * because that number is the host's worst case (it is computed with every
+ * optional record present at the maximum vector length) and the frames actually
+ * written are usually far smaller -- 4576 bytes on both hosts measured. A frame
+ * that genuinely does not fit fails loudly on its own: the host cannot write it,
+ * the stub dies, and UML reports that. What is worth avoiding is being
+ * surprised, so say the numbers out loud at boot instead.
+ *
+ * SECCOMP mode is stricter and is handled separately: there the frame has to
+ * land inside sigstack[] alone, and init_seccomp() checks that it did.
+ */
+static void __init check_stub_sigstack(void)
+{
+	unsigned long have = STUB_DATA_PAGES * UM_KERN_PAGE_SIZE;
+
+	if (!elf_aux_min_sigstack) {
+		os_info("Stub signal stack: %lu bytes (host publishes no AT_MINSIGSTKSZ)\n",
+			have);
+		return;
+	}
+
+	os_info("Stub signal stack: %lu bytes, host AT_MINSIGSTKSZ %ld%s\n",
+		have, elf_aux_min_sigstack,
+		have < (unsigned long)elf_aux_min_sigstack ?
+			" -- SMALLER than this host's worst case" : "");
+}
+
 void __init os_early_checks(void)
 {
 	int pid;
 
 	/* Print out the core dump limits early */
 	check_coredump_limit();
+
+	check_stub_sigstack();
 
 	/* Need to check this early because mmapping happens before the
 	 * kernel is running.
