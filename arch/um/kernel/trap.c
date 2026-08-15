@@ -332,11 +332,13 @@ unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user,
 	else if (current->pagefault_disabled) {
 		if (!mc) {
 			show_regs(container_of(regs, struct pt_regs, regs));
-			panic("Segfault with pagefaults disabled but no mcontext");
+			panic("Segfault with pagefaults disabled but no mcontext: addr 0x%lx, ip 0x%lx, %s",
+			      address, ip, is_write ? "write" : "read");
 		}
 		if (!current->thread.segv_continue) {
 			show_regs(container_of(regs, struct pt_regs, regs));
-			panic("Segfault without recovery target");
+			panic("Segfault without recovery target: addr 0x%lx, ip 0x%lx, %s",
+			      address, ip, is_write ? "write" : "read");
 		}
 		mc_set_rip(mc, current->thread.segv_continue);
 		current->thread.segv_continue = NULL;
@@ -344,7 +346,8 @@ unsigned long segv(struct faultinfo fi, unsigned long ip, int is_user,
 	}
 	else if (current->mm == NULL) {
 		show_regs(container_of(regs, struct pt_regs, regs));
-		panic("Segfault with no mm");
+		panic("Segfault with no mm: addr 0x%lx, ip 0x%lx, %s",
+			      address, ip, is_write ? "write" : "read");
 	}
 	else if (!is_user && address > PAGE_SIZE && address < TASK_SIZE) {
 		show_regs(container_of(regs, struct pt_regs, regs));

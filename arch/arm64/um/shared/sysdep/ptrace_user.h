@@ -22,6 +22,19 @@
 #define REGS_SP_INDEX HOST_SP
 
 /*
+ * The instruction that enters the kernel, for hosts without PTRACE_SYSEMU.
+ *
+ * arm64 gained PTRACE_SYSEMU in 5.3; UML has to run on hosts older than that
+ * (a phone can pair a current Android with a 4.19 kernel), and there the guest
+ * syscall is intercepted by cancelling it at a PTRACE_SYSCALL stop instead.
+ * That covers every case but one: while the guest is being single-stepped, a
+ * PTRACE_SINGLESTEP over an SVC would execute the guest's syscall on the host
+ * before any stop could cancel it. UML therefore looks at the instruction it is
+ * about to step and takes a syscall stop for that one.
+ */
+#define UM_SYSCALL_TRAP_INSN	0xd4000001U	/* svc #0 */
+
+/*
  * arm64 makes one general-purpose register unusable at a ptrace syscall stop.
  *
  * To tell a tracer whether a stop came from syscall entry or syscall exit, the

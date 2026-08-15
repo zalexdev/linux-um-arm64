@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <asm/vmlinux.lds.h>
 #include <asm/page.h>
+#include <asm/cache.h>
 
 OUTPUT_FORMAT(ELF_FORMAT)
 OUTPUT_ARCH(ELF_ARCH)
@@ -137,9 +138,29 @@ SECTIONS
   }
   .fini_array     : { *(.fini_array) }
 
+  /*
+   * The alignment-specific data sections are named here for the same reason
+   * RW_DATA() names them on every other architecture: left out, they are
+   * orphans, and where an orphan lands is the linker's choice rather than this
+   * script's.
+   *
+   * The two linkers do not choose alike. bfd ld put them after .data, which is
+   * writable and correct. lld puts them with the read-only data, which places
+   * them inside __start_rodata..__end_rodata -- so mark_rodata_ro() mprotects
+   * bit_wait_table and friends read-only, and the first process to wait on a
+   * buffer dies on the write with "Segfault with no mm" and a backtrace
+   * pointing at prepare_to_wait, which has nothing to do with the cause.
+   *
+   * DATA_DATA already claims .data..once, .data..do_once and
+   * .data..shared_aligned, so only these need adding.
+   */
   .data    :
   {
     INIT_TASK_DATA(KERNEL_STACK_SIZE)
+    NOSAVE_DATA
+    PAGE_ALIGNED_DATA(PAGE_SIZE)
+    CACHELINE_ALIGNED_DATA(L1_CACHE_BYTES)
+    READ_MOSTLY_DATA(L1_CACHE_BYTES)
     DATA_DATA
     *(.gnu.linkonce.d*)
     CONSTRUCTORS

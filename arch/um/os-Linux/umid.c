@@ -30,6 +30,14 @@ static int __init make_uml_dir(void)
 	char dir[512] = { '\0' };
 	int len, err;
 
+	/*
+	 * A previous call failed and freed it. Say so rather than dereferencing
+	 * it below: make_umid() retries with a random umid, so this is reached
+	 * whenever the first attempt failed.
+	 */
+	if (uml_dir == NULL)
+		return -ENOENT;
+
 	if (*uml_dir == '~') {
 		char *home = getenv("HOME");
 
@@ -258,7 +266,19 @@ static int __init make_umid(void)
 	if (umid_setup)
 		return 0;
 
-	make_uml_dir();
+	/*
+	 * Failing this leaves uml_dir NULL, and every use of it below is a
+	 * plain dereference -- the first, strscpy() of a NULL source, panics
+	 * the kernel as "Segfault with no mm" with make_umid in the backtrace
+	 * and nothing pointing at the real cause a few lines above.
+	 *
+	 * It is not a hypothetical. The default uml_dir is under $HOME, and a
+	 * read-only or absent home directory is ordinary on a phone, in a
+	 * container, or under any service manager that runs UML with HOME=/.
+	 */
+	err = make_uml_dir();
+	if (err)
+		goto err;
 
 	if (*umid == '\0') {
 		strscpy(tmp, uml_dir);

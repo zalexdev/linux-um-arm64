@@ -16,6 +16,7 @@ extern int using_seccomp;
  * check_sysemu(). Set once at boot, before any stub exists.
  */
 extern int have_ptrace_sysemu;
+extern int syscall_cancel_nr;
 
 extern void new_thread_handler(void);
 extern void handle_syscall(struct uml_pt_regs *regs);

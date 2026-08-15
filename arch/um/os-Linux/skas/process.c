@@ -468,6 +468,7 @@ int using_seccomp;
  * architecture sees; arm64 hosts older than 5.3 flip it to 0.
  */
 int have_ptrace_sysemu = 1;
+int syscall_cancel_nr = -1;
 
 /**
  * start_userspace() - prepare a new userspace process
@@ -835,9 +836,15 @@ void userspace(struct uml_pt_regs *regs)
 				 * read above, so the syscall number UML needs
 				 * has already been taken and overwriting it
 				 * here loses nothing.
+					 *
+					 * syscall_cancel_nr is -1, the documented
+					 * "run nothing" value, unless the probe found
+					 * the host refuses it -- in which case it names
+					 * a harmless syscall to run in the guest call's
+					 * place. See check_sysemu().
 				 */
 				if (!have_ptrace_sysemu &&
-				    ptrace_set_syscall_nr(pid, -1)) {
+				    ptrace_set_syscall_nr(pid, syscall_cancel_nr)) {
 					printk(UM_KERN_ERR "%s - failed to cancel a guest syscall, errno = %d\n",
 					       __func__, errno);
 					fatal_sigsegv();
