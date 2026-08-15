@@ -17,6 +17,7 @@
 #include <registers.h>
 #include <skas.h>
 #include <sysdep/ptrace.h>
+#include <sysdep/archsetjmp.h>
 #include <sysdep/stub.h>
 #include "../internal.h"
 
@@ -74,10 +75,19 @@ static int __init init_syscall_regs(void)
 	syscall_regs[REGS_IP_INDEX] = STUB_CODE +
 		((unsigned long) stub_syscall_handler -
 		 (unsigned long) __syscall_stub_start);
+	/*
+	 * Same ABI question as a fresh kernel stack, and the same answer: how
+	 * much to leave below the top is per-architecture. sigstack[] is
+	 * page-aligned and page-sized, so subtracting a word unconditionally
+	 * would hand the stub an SP that is 8 mod 16 -- fine on x86, where it
+	 * stands in for the return address CALL pushes, and a violation of
+	 * AAPCS64, which wants 16-byte alignment at all times and has hardware
+	 * checking behind it.
+	 */
 	syscall_regs[REGS_SP_INDEX] = STUB_DATA +
 		offsetof(struct stub_data, sigstack) +
 		sizeof(((struct stub_data *) 0)->sigstack) -
-		sizeof(void *);
+		ARCH_INIT_SP_RESERVE;
 
 	return 0;
 }
