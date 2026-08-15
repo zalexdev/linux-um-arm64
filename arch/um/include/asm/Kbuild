@@ -12,8 +12,15 @@ generic-y += irq_work.h
 generic-y += kdebug.h
 generic-y += mcs_spinlock.h
 generic-y += mmiowb.h
+# The arm64 subarch reuses arch/arm64/kernel/module.c and module-plts.c, which
+# need arm64's own struct mod_arch_specific (PLT bookkeeping) and the PLT
+# sections in the module linker script. Those live in arch/arm64/um/asm/, and a
+# generic-y wrapper here would shadow them -- generated headers win the include
+# path -- leaving "field has incomplete type 'struct mod_arch_specific'".
+ifneq ($(HEADER_ARCH),arm64)
 generic-y += module.h
 generic-y += module.lds.h
+endif
 generic-y += parport.h
 generic-y += percpu.h
 generic-y += percpu_types.h

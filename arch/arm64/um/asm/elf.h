@@ -11,8 +11,15 @@
 
 #define CORE_DUMP_USE_REGSET
 
+/*
+ * The AArch32 "no-op" relocation. apply_relocate_add() accepts it alongside
+ * R_AARCH64_NONE because a module can carry compat relocations; both mean
+ * "nothing to do".
+ */
+#define R_ARM_NONE			0
+
 /* aarch64 relocation types actually used by the module loader. */
-#define R_AARCH64_NONE			0
+#define R_AARCH64_NONE			256
 #define R_AARCH64_ABS64			257
 #define R_AARCH64_ABS32			258
 #define R_AARCH64_ABS16			259
@@ -28,6 +35,39 @@
 #define R_AARCH64_GLOB_DAT		1025
 #define R_AARCH64_JUMP_SLOT		1026
 #define R_AARCH64_RELATIVE		1027
+
+/*
+ * The rest of the aarch64 static relocation set. apply_relocate_add() in
+ * arch/arm64/kernel/module.c switches over all of these, so every one has to be
+ * defined for it to compile even though a given module will use only a few --
+ * which relocations appear is decided by the module's own code and data, not by
+ * the loader.
+ */
+#define R_AARCH64_MOVW_UABS_G0          263
+#define R_AARCH64_MOVW_UABS_G0_NC       264
+#define R_AARCH64_MOVW_UABS_G1          265
+#define R_AARCH64_MOVW_UABS_G1_NC       266
+#define R_AARCH64_MOVW_UABS_G2          267
+#define R_AARCH64_MOVW_UABS_G2_NC       268
+#define R_AARCH64_MOVW_UABS_G3          269
+#define R_AARCH64_MOVW_SABS_G0          270
+#define R_AARCH64_MOVW_SABS_G1          271
+#define R_AARCH64_MOVW_SABS_G2          272
+#define R_AARCH64_ADR_PREL_PG_HI21_NC   276
+#define R_AARCH64_LDST8_ABS_LO12_NC     278
+#define R_AARCH64_TSTBR14               279
+#define R_AARCH64_CONDBR19              280
+#define R_AARCH64_LDST16_ABS_LO12_NC    284
+#define R_AARCH64_LDST32_ABS_LO12_NC    285
+#define R_AARCH64_LDST64_ABS_LO12_NC    286
+#define R_AARCH64_LDST128_ABS_LO12_NC   299
+#define R_AARCH64_MOVW_PREL_G0          287
+#define R_AARCH64_MOVW_PREL_G0_NC       288
+#define R_AARCH64_MOVW_PREL_G1          289
+#define R_AARCH64_MOVW_PREL_G1_NC       290
+#define R_AARCH64_MOVW_PREL_G2          291
+#define R_AARCH64_MOVW_PREL_G2_NC       292
+#define R_AARCH64_MOVW_PREL_G3          293
 
 #define elf_check_arch(x) ((x)->e_machine == EM_AARCH64)
 

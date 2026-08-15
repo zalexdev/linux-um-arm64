@@ -7,12 +7,15 @@ config UML_ARM64
 	select ARCH_USE_QUEUED_SPINLOCKS
 	select HAVE_EFFICIENT_UNALIGNED_ACCESS
 	#
-	# MODULES_USE_ELF_RELA is deliberately NOT selected yet. aarch64 modules
-	# are indeed RELA, but nothing here implements apply_relocate_add(), so
-	# selecting it would assert a capability that does not exist. CONFIG_MODULES
-	# is off in the defconfig; allmodconfig and randconfig will not link until
-	# module support lands, and that is honest rather than hidden.
+	# Loadable modules. aarch64 modules are RELA, and the relocation
+	# processing is arch/arm64/kernel/module.c reused verbatim -- the same
+	# arrangement x86 UML has used for its own module.c for years
+	# (subarch-$(CONFIG_MODULES) in the Makefile). HAVE_MOD_ARCH_SPECIFIC
+	# goes with it because arm64's struct mod_arch_specific carries the PLT
+	# bookkeeping that module-plts.c fills in.
 	#
+	select MODULES_USE_ELF_RELA
+	select HAVE_MOD_ARCH_SPECIFIC
 	#
 	# The guest's syscall ABI must match what aarch64 userspace was built
 	# against, and that is decided here rather than by arch/arm64/Kconfig,

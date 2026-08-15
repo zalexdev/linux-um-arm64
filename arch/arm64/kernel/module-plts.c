@@ -10,6 +10,15 @@
 #include <linux/moduleloader.h>
 #include <linux/sort.h>
 
+/*
+ * get_plt_entry() and friends build veneers with aarch64_insn_gen_*(). Those
+ * are declared in <asm/insn.h>, which reaches this file only by way of
+ * <linux/ftrace.h> -> <asm/ftrace.h> on arm64. ARCH=um supplies its own
+ * asm/ftrace.h, so the declarations do not arrive and every encoder call
+ * becomes an implicit declaration. Include what is used.
+ */
+#include <asm/insn.h>
+
 static struct plt_entry __get_adrp_add_pair(u64 dst, u64 pc,
 					    enum aarch64_insn_register reg)
 {
