@@ -267,8 +267,27 @@ static int __init seccomp_helper(void *data)
 	if (stub_syscall3(__NR_close_range, 1, ~0U, 0))
 		exit(1);
 
-	set_sigstack(seccomp_test_stub_data->sigstack,
-			sizeof(seccomp_test_stub_data->sigstack));
+	/*
+	 * Use the whole shared area as the signal stack, exactly as the real
+	 * stub does in stub_exe.c, rather than only the sigstack member.
+	 *
+	 * The member is one page, and one page is not necessarily a legal
+	 * alternate stack: the minimum is per-architecture, and arm64's
+	 * MINSIGSTKSZ is 5120 against the asm-generic 2048. With 4K pages
+	 * sigaltstack() therefore rejects it with ENOMEM and set_sigstack()
+	 * panics -- inside a CLONE_VFORK child that has just closed every file
+	 * descriptor above zero, so the message goes nowhere and the parent is
+	 * left blocked in clone() forever. The visible symptom is UML stopping
+	 * dead after "Checking that seccomp filters can be installed...", which
+	 * is how SECCOMP mode came to be silently unavailable on arm64.
+	 *
+	 * The handler still records mctx_offset relative to sigstack[0] and the
+	 * frame still lands in the last page, because the stack top is the same
+	 * address either way -- this only widens the range that sigaltstack is
+	 * told about.
+	 */
+	set_sigstack(seccomp_test_stub_data,
+			sizeof(*seccomp_test_stub_data));
 
 	sa.sa_flags = SA_ONSTACK | SA_NODEFER | SA_SIGINFO;
 	sa.sa_sigaction = (void *) sigsys_handler;
@@ -354,10 +373,36 @@ static bool __init init_seccomp(void)
 		return true;
 	}
 
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 2)
-		os_info("missing\n");
-	else
-		os_info("error\n");
+	/*
+	 * Say which step failed. The helper runs with every file descriptor
+	 * above zero closed, so it cannot report anything itself, and a bare
+	 * "error" here is indistinguishable between "this host has no seccomp"
+	 * and "UML's own probe is broken" -- which is how a fixable bug in the
+	 * probe turned into SECCOMP mode simply never being available.
+	 */
+	if (WIFEXITED(status)) {
+		switch (WEXITSTATUS(status)) {
+		case 1:
+			os_info("no close_range\n");
+			break;
+		case 2:
+			os_info("missing\n");
+			break;
+		case 3:
+			os_info("filter rejected\n");
+			break;
+		case 4:
+			os_info("filter did not trap\n");
+			break;
+		default:
+			os_info("helper exited %d\n", WEXITSTATUS(status));
+			break;
+		}
+	} else if (WIFSIGNALED(status)) {
+		os_info("helper killed by signal %d\n", WTERMSIG(status));
+	} else {
+		os_info("error, status 0x%x\n", status);
+	}
 
 	munmap(seccomp_test_stub_data, sizeof(*seccomp_test_stub_data));
 	return false;
