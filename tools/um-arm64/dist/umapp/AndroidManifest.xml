@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  umarm - a Linux kernel running inside an ordinary Android app.
+
+  The point of packaging it as an app rather than an adb shell script is that
+  the app sandbox is much narrower than the shell's: an app runs in the
+  untrusted_app SELinux domain, under a W^X policy that forbids executing
+  anything the app wrote itself. The only directory an app may execute from is
+  the native library directory unpacked from its own APK, which is why the
+  kernel, the stub, passt, umnet and umusb are all shipped as lib*.so.
+
+  android:extractNativeLibs="true" matters for the same reason: the binaries
+  have to exist as real files on disk to be exec'd, not mapped straight out of
+  a compressed APK.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.umarm.debian"
+    android:versionCode="1"
+    android:versionName="0.1">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+
+    <!--
+      Without this the guest has no network and the reason is well hidden.
+      Android gates socket(2) on group membership rather than on a check at
+      connect time: the INTERNET permission is what puts the app's uid in the
+      "inet" group, and without it every socket() an app makes returns EPERM.
+      passt, which is what gives the guest its network, then comes up, prints
+      its DHCP and DNS configuration exactly as if it had worked, and only then
+      fails with "Error refilling IPv4 host socket pool: Operation not
+      permitted". The guest boots, gets a lease, and can reach nothing.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      USB host mode, for handing a Realtek RTL8811AU through to the guest.
+
+      required="false" on purpose: this is the app's optional trick, not its
+      reason to exist. Declared required, the platform would refuse to install
+      it on any device without USB host support, and most runs here have
+      nothing plugged in at all.
+
+      There is no permission to declare alongside it. Access to a USB device
+      is granted per device, at runtime, by the user, and the descriptor comes
+      back through UsbDeviceConnection; an app never opens /dev/bus/usb.
+    -->
+    <uses-feature android:name="android.hardware.usb.host"
+        android:required="false" />
+
+    <application
+        android:label="umarm"
+        android:extractNativeLibs="true"
+        android:allowBackup="false"
+        android:debuggable="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="umarm"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              Plugging the adapter in offers to launch umarm, and the platform
+              then grants permission to that device with no dialog. Worth
+              having: the alternative is a dialog that has to be answered
+              before the guest can start.
+
+              singleTop above belongs to this. Without it, attaching the
+              adapter while a guest is running would stack a second Activity
+              on top of the boot in progress instead of delivering the intent
+              to the one already there.
+            -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+        </activity>
+    </application>
+</manifest>

@@ -1,0 +1,138 @@
+#!/system/bin/sh
+# Debian on Android, via a User Mode Linux kernel running as an ordinary process.
+#
+#   ./deb                    interactive Debian shell
+#   ./deb uname -a           run one command, print its output, exit
+#   ./deb -v uname -a        same, but show the kernel boot log too
+#
+# No root, no modules, no /dev/kvm, no mounts on the Android side. Everything
+# here runs as whatever uid you already are.
+
+HERE=$(dirname "$0")
+cd "$HERE" || exit 1
+
+# HOME: UML builds its umid directory from $HOME, which adb leaves unset, and
+# the path then lands on the read-only rootfs. TMPDIR: Android points it at
+# /data/local/tmp (f2fs), and UML prefers TMPDIR over /tmp when choosing where
+# to keep guest RAM -- /tmp here is tmpfs, so this keeps guest memory out of
+# flash.
+export HOME="$PWD"
+export TMPDIR=/tmp
+[ -d /tmp ] && [ -w /tmp ] || export TMPDIR="$PWD"
+
+MEM=${UMDEB_MEM:-1024M}
+KERNEL=./linux-um
+UMNET=./umnet
+PASST=./passt
+IMAGE=${UMDEB_IMAGE:-debian.ext4}
+SHARE="$PWD/share"
+
+for f in "$KERNEL" "$IMAGE"; do
+	[ -e "$f" ] || { echo "deb: missing $f (run install.sh first)" >&2; exit 2; }
+done
+chmod 755 "$KERNEL" 2>/dev/null
+mkdir -p "$SHARE" || exit 2
+
+VERBOSE=0
+if [ "$1" = "-v" ]; then VERBOSE=1; shift; fi
+
+COMMON="mem=$MEM ubd0=$IMAGE root=/dev/ubda rw init=/umarm-init umarm.share=$SHARE panic=-1 con=null seccomp=auto"
+
+# Two things make this several times faster, and both are measured rather than
+# assumed (see doc/80-performance.md):
+#
+#   seccomp=auto  -- guest syscalls are caught in-process with SIGSYS instead of
+#                    by a ptrace tracer. Halves syscall cost, and on hosts older
+#                    than 5.3 it also avoids the PTRACE_SYSEMU substitution
+#                    entirely. Falls back to ptrace where seccomp is unavailable.
+#
+#   single-core pinning -- NOT enabled by default, and the reason is worth
+#                    recording. Pinning everything to one core halves the cost
+#                    of a syscall in a microbenchmark (22us -> 11us), because
+#                    each guest syscall is a futex handoff between the stub and
+#                    the UML kernel thread and on one core that is a direct
+#                    switch with the shared page still in L1.
+#
+#                    On a real workload it is a regression: measured over seven
+#                    verified runs of "dpkg -l | wc -l", 2.75s unpinned against
+#                    3.17s pinned. A syscall loop is pure handoff, but real work
+#                    also has guest computation and ubd I/O, and those then
+#                    contend for the single core they were given. The
+#                    microbenchmark win does not survive contact with a workload.
+#
+#                    Set UMDEB_MASK to a hex affinity mask to try it anyway; for
+#                    example UMDEB_MASK=80 for core 7 on a big.LITTLE part where
+#                    that is the fastest core.
+# Networking, if the pieces are present and not disabled with UMDEB_NET=0.
+#
+# umnet hands UML one end of a socketpair as its network device and runs passt
+# -- a userspace TCP/IP stack -- on the other end. Nothing here needs root, a
+# tap device, CAP_NET_ADMIN or user namespaces, which is the whole point: an
+# unrooted phone has none of them.
+if [ "${UMDEB_NET:-1}" != 0 ] && [ -x "$UMNET" ] && [ -x "$PASST" ]; then
+	NET="$UMNET --passt $PASST --"
+else
+	NET=""
+fi
+
+if [ -n "${UMDEB_MASK:-}" ] && [ "${UMDEB_MASK}" != 0 ] && command -v taskset >/dev/null 2>&1; then
+	PIN="taskset $UMDEB_MASK"
+else
+	PIN=""
+fi
+
+if [ $# -eq 0 ]; then
+	# Interactive. con0=fd:0,fd:1 wires the console to this terminal, which
+	# requires fd 0 to be pollable -- UML registers it with epoll and
+	# epoll_ctl rejects, say, /dev/null with EPERM, after which the console
+	# goes quiet and it looks like nothing booted.
+	if [ ! -t 0 ]; then
+		echo "deb: stdin is not a terminal; run 'adb shell' first, then ./deb" >&2
+		echo "     (or pass a command: ./deb uname -a)" >&2
+		exit 2
+	fi
+	rm -f "$SHARE/cmd"
+	exec $PIN $NET $KERNEL $COMMON con0=fd:0,fd:1
+fi
+
+# One-shot. The command goes through the shared directory rather than the
+# kernel command line, which cannot carry spaces or quoting.
+printf '%s\n' "$*" > "$SHARE/cmd"
+
+if [ "$VERBOSE" = 1 ]; then
+	$PIN $NET $KERNEL $COMMON con0=null,fd:1 2>&1 | cat
+	exit 0
+fi
+
+# Show the command's output and nothing else. The guest brackets it with
+# markers; everything outside them is kernel boot noise. If the markers never
+# appear something went wrong before the command ran, so in that case print the
+# whole log rather than silently nothing -- an empty result and a failed boot
+# must not look the same.
+out=$($PIN $NET $KERNEL $COMMON con0=null,fd:1 2>&1 | cat)
+case "$out" in
+*UMARM_OUTPUT_BEGIN*)
+	printf '%s\n' "$out" |
+		sed -n '/UMARM_OUTPUT_BEGIN/,/UMARM_EXIT=/p' |
+		sed -e '/UMARM_OUTPUT_BEGIN/d' -e '/UMARM_EXIT=/d' |
+		tr -d '\r'
+	# Propagate the command's own exit status, so ./deb composes with the
+	# Android shell the way any other command does.
+	rc=$(printf '%s\n' "$out" | sed -n 's/.*UMARM_EXIT=\([0-9]*\).*/\1/p' | tail -1)
+	exit "${rc:-0}"
+	;;
+*"Failed to lock"*)
+	# UML takes an exclusive flock on the disk image, so a second instance --
+	# or a first one that was killed and has not died yet -- cannot open it.
+	# The kernel's own report of this is a root-mount panic with a stack
+	# trace, which reads like a corrupt filesystem and is not.
+	echo "deb: another umdebian is already running (the disk image is locked)." >&2
+	echo "     Close it, or: pkill -f linux-um" >&2
+	exit 1
+	;;
+*)
+	echo "deb: the guest did not reach the command; full log follows" >&2
+	printf '%s\n' "$out"
+	exit 1
+	;;
+esac

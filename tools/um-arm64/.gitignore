@@ -1,0 +1,3 @@
+# Compiled probes and build output; the sources next to them are what matters.
+probe/*
+!probe/*.c
