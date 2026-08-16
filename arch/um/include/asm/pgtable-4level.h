@@ -35,10 +35,36 @@
  * entries per page directory level
  */
 
-#define PTRS_PER_PTE 512
+/*
+ * PTRS_PER_PTE is how many pages one PMD covers, so it follows PAGE_SHIFT and
+ * cannot be a literal.
+ *
+ * At 4 KB pages this is 2 MB >> 12 = 512, exactly what the literal said. At
+ * 16 KB it is 128, and the literal was four times too large -- with real
+ * consequences, because generic mm reads PTRS_PER_PTE as "entries belonging to
+ * this PMD". finish_fault() bounds a large folio's PTE run with it, so a run
+ * four times too long was permitted and set_ptes() wrote past the window this
+ * PMD actually owns, into slots no lookup for those addresses will ever
+ * consult and zap_pte_range() will never free -- while the rmap and rss
+ * counters had already counted them. The result is a guest that re-faults
+ * forever on those addresses and prints "Bad rss-counter state" as each
+ * process exits. Silent, not a crash: the stray index still lands inside the
+ * page-table page.
+ *
+ * ext4 makes this reachable rather than theoretical: it enables large folios
+ * on every regular file, and any folio of order 7 or above straddles a PMD at
+ * 16 KB pages.
+ *
+ * The upper three levels stay literal because their invariants already hold at
+ * both page sizes: 512 * PMD_SIZE == PUD_SIZE and so on up.
+ */
+#define PTRS_PER_PTE (1UL << (PMD_SHIFT - PAGE_SHIFT))
 #define PTRS_PER_PMD 512
 #define PTRS_PER_PUD 512
 #define PTRS_PER_PGD 512
+
+/* The invariant the literal used to break. */
+static_assert(PTRS_PER_PTE == (PMD_SIZE >> PAGE_SHIFT));
 
 #define USER_PTRS_PER_PGD ((TASK_SIZE + (PGDIR_SIZE - 1)) / PGDIR_SIZE)
 
