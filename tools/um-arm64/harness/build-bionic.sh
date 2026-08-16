@@ -13,20 +13,55 @@
 # script does differently from build-android.sh is aim the compiler at Android,
 # which it does by shimming --target on after kbuild's own -- clang takes the
 # last one. Overriding CC instead would turn off kbuild's compiler probing.
+#
+# Every path below is derived from where this script actually is, or taken from
+# the environment. It used to hardcode one particular home directory, which
+# told anyone else reading it very little:
+#
+#   TREE=${TREE:-/root/mlu-arm64/linux}
+#
+# Nothing here wants to be root and nothing wants a specific location. Clone
+# anywhere, run it from there.
 set -uo pipefail
 
-TREE=${TREE:-/root/mlu-arm64/linux}
-ART=${ART:-/root/mlu-arm64/artifacts}
-NDK=${NDK:-/tmp/ndk/android-ndk-r27c}
-# 30 is the oldest level whose bionic declares everything UML uses directly:
-# statx (30), getrandom (28), futimes (26). The phone is API 35.
-API=${API:-30}
-JOBS=${JOBS:-$(nproc)}
-O=${O:-/tmp/umarm-build-bionic}
+HERE=$(cd "$(dirname "$0")" && pwd)
+# The harness lives at <repo>/harness in this tree and at
+# <linux>/tools/um-arm64/harness when imported into a kernel tree; the kernel
+# source is the parent of whichever one this is.
+if [ -f "$HERE/../linux/Makefile" ]; then
+    TREE=${TREE:-$(cd "$HERE/.." && pwd)/linux}      # <repo>/harness
+elif [ -f "$HERE/../../../Makefile" ]; then
+    TREE=${TREE:-$(cd "$HERE/../../.." && pwd)}      # <linux>/tools/um-arm64/harness
+else
+    TREE=${TREE:-$(cd "$HERE/.." && pwd)}
+fi
+if [ ! -f "$TREE/Makefile" ]; then
+    echo "build-bionic.sh: no kernel tree at $TREE (set TREE=)" >&2
+    exit 2
+fi
 
-TOOL=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+ART=${ART:-$TREE/../artifacts}
+API=${API:-30}   # oldest bionic declaring all UML uses: statx(30), getrandom(28)
+JOBS=${JOBS:-$(nproc)}
+O=${O:-${TMPDIR:-/tmp}/umarm-build-bionic}
+
+# Find the NDK rather than insisting on one path. $NDK and the two variables
+# Google's own tooling sets are checked first, then the usual install
+# locations, newest last so the newest wins.
+if [ -z "${NDK:-}" ]; then
+    for c in "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK_ROOT:-}" \
+             "$HOME"/Android/Sdk/ndk/* "$HOME"/Library/Android/sdk/ndk/* \
+             /usr/lib/android-ndk /opt/android-ndk* \
+             "${TMPDIR:-/tmp}"/ndk/android-ndk-*; do
+        [ -n "$c" ] && [ -x "$c/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" ] \
+            && NDK=$c
+    done
+fi
+TOOL=${NDK:-}/toolchains/llvm/prebuilt/linux-x86_64/bin
 if [ ! -x "$TOOL/clang" ]; then
-    echo "no NDK at $NDK (set NDK=)" >&2
+    echo "build-bionic.sh: no Android NDK found. Set NDK=/path/to/android-ndk-rXX" >&2
+    echo "  looked at \$NDK, \$ANDROID_NDK_HOME, \$ANDROID_NDK_ROOT," >&2
+    echo "  ~/Android/Sdk/ndk/*, /opt/android-ndk*, ${TMPDIR:-/tmp}/ndk/*" >&2
     exit 2
 fi
 
@@ -34,7 +69,7 @@ export KBUILD_BUILD_TIMESTAMP=${KBUILD_BUILD_TIMESTAMP:-"Thu Jan  1 00:00:00 UTC
 export KBUILD_BUILD_USER=um
 export KBUILD_BUILD_HOST=arm64
 
-SHIM=/root/mlu-arm64/.bionic-shim
+SHIM=${SHIM:-$O/.bionic-shim}
 mkdir -p "$SHIM"
 cat > "$SHIM/clang" <<EOF
 #!/bin/sh
