@@ -318,6 +318,57 @@ stub_seccomp_restore_state(struct stub_data_arch *arch)
 	arch->sync = 0;
 }
 
+/*
+ * stub_arch_init() - what this architecture must do inside a fresh stub
+ *
+ * Turn pointer authentication off for the stub process.
+ *
+ * There is one stub per guest mm, so a guest fork() makes a new one, and a new
+ * stub is a new execve() -- which on arm64 makes the host generate fresh PAC
+ * keys and enable them. The child of a guest fork() therefore comes back in a
+ * process whose APIAKey has nothing to do with the one that signed the return
+ * addresses already sitting on its stack.
+ *
+ * glibc's _Fork is exactly that shape: paciasp on entry, the clone syscall in
+ * the middle, autiasp on the way out. The parent signs, the child
+ * authenticates with a different key, and since FEAT_FPAC (mandatory from
+ * Armv8.6) a failed authentication traps immediately rather than corrupting a
+ * pointer. The child dies inside _Fork, before returning to its caller and
+ * before anything it might have printed. On a CPU without FEAT_PAuth the same
+ * instructions are NOPs and nothing happens, which is why this is invisible on
+ * older hardware and fatal on newer.
+ *
+ * Making the instructions inert is the consistent answer rather than a
+ * workaround: the port already refuses to advertise HWCAP_PACA and HWCAP_PACG
+ * to the guest (see arch/arm64/um/cpuinfo.c), so a guest told it has no
+ * pointer authentication should not be running with keys enabled underneath.
+ * Synchronising keys across stubs is the alternative and is not workable --
+ * they are only reachable through PTRACE_SETREGSET(NT_ARM_PACA_KEYS), and in
+ * SECCOMP mode the stub is not ptraced at all.
+ *
+ * Must run after PR_SET_NO_NEW_PRIVS and before the seccomp filter is
+ * installed, and it cannot be done before the execve: the exec is precisely
+ * what re-randomises and re-enables the keys.
+ *
+ * The return value is ignored on purpose: a host without FEAT_PAuth answers
+ * -EINVAL, which is the case where there is nothing to disable.
+ */
+#ifndef PR_PAC_SET_ENABLED_KEYS
+#define PR_PAC_SET_ENABLED_KEYS	60
+#define PR_PAC_APIAKEY		(1UL << 0)
+#define PR_PAC_APIBKEY		(1UL << 1)
+#define PR_PAC_APDAKEY		(1UL << 2)
+#define PR_PAC_APDBKEY		(1UL << 3)
+#endif
+
+static __always_inline void stub_arch_init(void)
+{
+	stub_syscall5(__NR_prctl, PR_PAC_SET_ENABLED_KEYS,
+		      PR_PAC_APIAKEY | PR_PAC_APIBKEY |
+		      PR_PAC_APDAKEY | PR_PAC_APDBKEY,
+		      0 /* none enabled */, 0, 0);
+}
+
 extern void stub_segv_handler(int, siginfo_t *, void *);
 extern void stub_syscall_handler(void);
 extern void stub_signal_interrupt(int, siginfo_t *, void *);

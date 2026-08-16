@@ -40,6 +40,12 @@ noinline static void real_init(void)
 	/* Needed in SECCOMP mode (and safe to do anyway) */
 	stub_syscall5(__NR_prctl, PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 
+	/*
+	 * Whatever this architecture has to settle in a fresh stub, before the
+	 * seccomp filter is installed and so still able to make any syscall.
+	 */
+	stub_arch_init();
+
 	/* read information from STDIN and close it */
 	res = stub_syscall3(__NR_read, 0,
 			    (unsigned long)&init_data, sizeof(init_data));

@@ -91,6 +91,11 @@ static __always_inline unsigned long stub_cycles_per_us(void)
 	return 0;
 }
 
+/* Nothing this architecture needs to do in a fresh stub. */
+static __always_inline void stub_arch_init(void)
+{
+}
+
 extern void stub_segv_handler(int, siginfo_t *, void *);
 extern void stub_syscall_handler(void);
 extern void stub_signal_interrupt(int, siginfo_t *, void *);
