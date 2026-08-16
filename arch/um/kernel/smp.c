@@ -205,8 +205,50 @@ void __init smp_cpus_done(unsigned int max_cpus)
 {
 }
 
-/* Set in uml_ncpus_setup */
-int uml_ncpus = 1;
+/*
+ * Set by ncpus= if given, otherwise by um_ncpus_init() from the host's CPU
+ * count. Zero means "nobody has decided yet", which is why the default is not
+ * simply written here.
+ */
+int uml_ncpus;
+
+/*
+ * Choose a CPU count when the command line did not.
+ *
+ * One less than the host has, because UML's CPUs are host threads and they are
+ * not the only threads it runs: the kernel thread and the stub processes need
+ * to be scheduled too, so asking for exactly as many CPUs as the host has
+ * oversubscribes it and the guest's own threads start evicting each other.
+ *
+ * Measured on a Raspberry Pi 5 (4x Cortex-A76, 16K pages, guest built from this
+ * tree), parallel compile in the guest, medians of 3 rounds, milliseconds:
+ *
+ *	ncpus=	1	2	3	4
+ *	make -jN	3000	1717	1483	1587
+ *	make -j1	2969	2928	2977	3002
+ *
+ * -- so three CPUs beat four on a four-CPU host, and the flat -j1 column is the
+ * control saying the machine did not move under the measurement. Defaulting to
+ * 1, as this did, left all of that unclaimed unless the operator knew the
+ * option existed.
+ *
+ * A host that only supports ptrace userspace cannot run more than one CPU
+ * thread; start_up.c clamps this back to 1 there, with a message, rather than
+ * refusing to boot.
+ */
+void __init um_ncpus_init(void)
+{
+	int host;
+
+	if (uml_ncpus)		/* ncpus= was given; the operator decides */
+		return;
+
+	host = os_nr_cpus_online();
+	uml_ncpus = clamp(host - 1, 1, NR_CPUS);
+
+	os_info("Using %d CPUs of the host's %d (ncpus= to override)\n",
+		uml_ncpus, host);
+}
 
 void __init prefill_possible_map(void)
 {

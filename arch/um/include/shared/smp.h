@@ -5,6 +5,7 @@
 #if IS_ENABLED(CONFIG_SMP)
 
 extern int uml_ncpus;
+void um_ncpus_init(void);
 
 int uml_curr_cpu(void);
 void uml_start_secondary(void *opaque);
@@ -14,6 +15,7 @@ void uml_ipi_handler(int vector);
 
 #define uml_ncpus 1
 #define uml_curr_cpu() 0
+static inline void um_ncpus_init(void) { }
 
 #endif /* CONFIG_SMP */
 

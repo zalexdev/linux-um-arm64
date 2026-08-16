@@ -233,3 +233,15 @@ void os_warn(const char *fmt, ...)
 	os_write_stderr(buf, len);
 	va_end(list);
 }
+
+/*
+ * CPUs the host will actually run us on. Used to pick a default for ncpus=;
+ * sysconf() rather than parsing /proc/cpuinfo because UML must work where /proc
+ * is not mounted, which is the ordinary case inside an app sandbox.
+ */
+int os_nr_cpus_online(void)
+{
+	long n = sysconf(_SC_NPROCESSORS_ONLN);
+
+	return n > 0 ? (int)n : 1;
+}

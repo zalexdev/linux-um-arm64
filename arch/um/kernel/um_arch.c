@@ -410,6 +410,13 @@ int __init linux_main(int argc, char **argv, char **envp)
 	os_info("Address space: host top 0x%lx, stub at 0x%lx, guest TASK_SIZE 0x%lx\n",
 		stub_start + STUB_SIZE, stub_start, task_size);
 
+	/*
+	 * Before os_early_checks(), which is where a host that can only offer
+	 * ptrace userspace clamps the count back to one: it has to see the
+	 * number we actually intend to use, not the unset zero.
+	 */
+	um_ncpus_init();
+
 	/* OS sanity checks that need to happen before the kernel runs */
 	os_early_checks();
 
