@@ -71,6 +71,27 @@ done
 # boot argument certainly does (ubd0=...).
 KERNELS=${KERNELS:?set KERNELS="label=/path/to/linux[%extra args] ..."}
 
+# Entries are separated by whitespace when no entry contains a space, and by
+# NEWLINES otherwise.
+#
+# The whitespace form is what everything in the tree uses and it stays working.
+# It cannot express a condition with *two* boot arguments, though, and that is
+# not a corner case: an S26 Ultra needs stub_exe= on every condition just to
+# boot (Android 16 refuses to execve a memfd), so every sweep on that device is
+# "stub_exe=... plus the thing being swept". Split on whitespace and the second
+# argument silently becomes a fourth kernel named `prefault` at path `0`, which
+# does not fail -- it produces a table with the wrong conditions in it.
+#
+#   KERNELS="a=/k%stub_exe=/p prefault=0
+#   b=/k%stub_exe=/p prefault=512K"
+#
+# Detected rather than switched on, so no caller has to change.
+case "$KERNELS" in
+*$'\n'*) KERNEL_IFS=$'\n' ;;
+*)	 KERNEL_IFS=' 	' ;;
+esac
+IFS=$KERNEL_IFS read -r -d '' -a KERNEL_LIST < <(printf '%s\0' "$KERNELS")
+
 # kernel_path/kernel_args - split one KERNELS entry
 kernel_path() { local v=${1#*=}; printf '%s' "${v%%\%*}"; }
 kernel_args() { local v=${1#*=}; case "$v" in *%*) printf '%s' "${v#*%}" ;; *) : ;; esac; }
@@ -87,7 +108,7 @@ log() { printf '[verify] %s\n' "$*"; }
 	echo "### rounds: $ROUNDS  mask: $MASK  keeper: $KEEPMASK"
 	echo
 	echo "### kernels under test"
-	for k in $KERNELS; do
+	for k in "${KERNEL_LIST[@]}"; do
 		lbl=${k%%=*}; path=$(kernel_path "$k")
 		echo "  $lbl"
 		echo "    path : $path"
@@ -116,9 +137,26 @@ env_snapshot() {
 env_snapshot > "$OUT/env-before.txt"
 
 # ---- stage the kernels ------------------------------------------------------
-for k in $KERNELS; do
+#
+# Push each DISTINCT binary once and copy it on the device for the remaining
+# labels that share it. The boot-argument form of KERNELS exists precisely so
+# one binary can be several conditions, so the common sweep pushes the same
+# bytes five times; on an S26 Ultra over TCP adb that is not merely wasteful,
+# it hangs -- the first push succeeds and the second wedges until the transport
+# is reset, which fails the run before a single round is measured. An on-device
+# cp is local, instant and cannot hit that.
+declare -A pushed=()
+for k in "${KERNEL_LIST[@]}"; do
 	lbl=${k%%=*}; path=$(kernel_path "$k")
-	adb push "$path" "$DEV/k-$lbl" >/dev/null 2>&1 || { echo "push failed: $path" >&2; exit 2; }
+	src=${pushed[$path]:-}
+	if [ -n "$src" ]; then
+		adb shell "cp $DEV/k-$src $DEV/k-$lbl && chmod 755 $DEV/k-$lbl" >/dev/null 2>&1 \
+			|| { echo "on-device copy failed: k-$src -> k-$lbl" >&2; exit 2; }
+	else
+		adb push "$path" "$DEV/k-$lbl" >/dev/null 2>&1 \
+			|| { echo "push failed: $path" >&2; exit 2; }
+		pushed[$path]=$lbl
+	fi
 done
 
 # ---- the run ----------------------------------------------------------------
@@ -140,7 +178,7 @@ run_uml() {
 }
 
 CONDS="native proot"
-for k in $KERNELS; do
+for k in "${KERNEL_LIST[@]}"; do
 	lbl=${k%%=*}
 	for m in $MODES; do
 		CONDS="$CONDS ${lbl}-${m}"
@@ -152,7 +190,7 @@ for r in $(seq 1 "$ROUNDS"); do
 	log "round $r/$ROUNDS"
 	run_native > "$OUT/native.$r" 2>&1
 	run_proot  > "$OUT/proot.$r"  2>&1
-	for k in $KERNELS; do
+	for k in "${KERNEL_LIST[@]}"; do
 		lbl=${k%%=*}; xargs=$(kernel_args "$k")
 		for m in $MODES; do
 			[ "$m" = sec ] && sc=on || sc=off
