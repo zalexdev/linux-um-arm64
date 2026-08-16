@@ -27,6 +27,23 @@ config UML
 	select HAVE_DEBUG_KMEMLEAK
 	select HAVE_DEBUG_BUGVERBOSE
 	select HAVE_PAGE_SIZE_4KB
+	#
+	# 16 KB guest pages, on arm64 only.
+	#
+	# Not a tuning knob: a guest page is a host mmap(), so it can never be
+	# smaller than the host's page size, and Android 15 and later ship 16 KB
+	# host kernels. A 4 KB UML on such a host cannot map its own stub and
+	# os_early_checks() refuses to continue -- correctly, but until now it
+	# pointed at a CONFIG_PAGE_SIZE_16KB that ARCH=um did not offer.
+	#
+	# The other direction costs nothing, which is what makes one binary
+	# enough: a 16 KB guest on a 4 KB host simply uses four host pages per
+	# guest page.
+	#
+	# arm64 only because that is where 16 KB hosts exist. x86_64 has no 16 KB
+	# page size to host one, so offering the choice there would only produce a
+	# configuration nobody can run.
+	select HAVE_PAGE_SIZE_16KB if UML_ARM64
 	select NO_DMA if !UML_DMA_EMULATION
 	select OF_EARLY_FLATTREE if OF
 	select GENERIC_IRQ_SHOW
