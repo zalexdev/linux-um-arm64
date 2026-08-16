@@ -162,18 +162,41 @@ fail:
  *    path only;
  *  - userfaultfd must see real faults, not speculative ones.
  *
- * The window ramps 0 -> 4 -> 16 -> 32 pages driven by a sequential-stream
- * detector, so a random-access workload never pays for pages it will not
- * touch; only a stream that keeps faulting exactly past the previous window
- * earns a bigger one. The size cap is expressed in BYTES ("prefault="
- * command-line option, default 128K, 0 disables) because PAGE_SIZE is
- * parametric here: with the page-count cap a 16K-page guest would silently
- * speculate a 512K window.
+ * The window ramps up in pages driven by a sequential-stream detector, so a
+ * random-access workload never pays for pages it will not touch; only a stream
+ * that keeps faulting exactly past the previous window earns a bigger one.
+ *
+ * The "prefault=" command-line override is in BYTES (0 disables) because
+ * PAGE_SIZE is parametric here and a page count would mean four times the
+ * memory on a 16K guest than on a 4K one. The *default* has to scale the other
+ * way, though, and getting that backwards cost most of the benefit: a fixed
+ * 128K default is 32 pages at 4K but only 8 at 16K, which silently truncates
+ * the ramp at its second-to-last step. Measured on a Snapdragon 870, 16K
+ * guest, 32MB working set, median of 7:
+ *
+ *	prefault=0	1492 MB/s	windows disabled
+ *	128K (8 pages)	2495 MB/s	what the fixed default gave
+ *	512K (32 pages)	4601 MB/s	the full ramp
+ *
+ * with the host managing 3222 MB/s on the same test -- so the truncated
+ * default was the difference between trailing the host by a quarter and
+ * beating it by 43%. Tie the default to the ramp instead, and the top of the
+ * ramp is reachable at any page size. On a 4K guest this is 128K, exactly the
+ * old default, so only the larger page sizes change behaviour.
+ *
+ * 32 is where the curve flattens, which is why the ramp stops there: extending
+ * it and re-measuring the same way gave 4908 MB/s at 64 pages and 4824 at 128,
+ * i.e. nothing beyond the noise for four times the memory speculated per
+ * fault.
  */
-static const unsigned int um_prefault_ramp[] = {0, 4, 16, 32};
+#define UM_PREFAULT_MAX_PAGES 32
+static const unsigned int um_prefault_ramp[] = {
+	0, 4, 16, UM_PREFAULT_MAX_PAGES
+};
 #define UM_PREFAULT_LEVEL_MAX (ARRAY_SIZE(um_prefault_ramp) - 1)
 
-static unsigned long um_prefault_bytes __read_mostly = SZ_128K;
+static unsigned long um_prefault_bytes __read_mostly =
+	UM_PREFAULT_MAX_PAGES * PAGE_SIZE;
 
 static int __init um_prefault_setup(char *str)
 {
