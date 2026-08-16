@@ -302,8 +302,23 @@ void wait_stub_done_seccomp(struct mm_id *mm_idp, int running, int wait_sigsys)
 	return;
 
 out_kill:
-	printk(UM_KERN_ERR "%s : failed to wait for stub, pid = %d, errno = %d\n",
-	       __func__, mm_idp->pid, errno);
+	/*
+	 * pid < 0 here means the SIGCHLD reaper marked this mm dead, i.e. the
+	 * stub is gone. During start_userspace that is the common Android
+	 * failure -- the stub could not be exec'd from a memfd at all -- and
+	 * "failed to wait for stub, pid = -1" describes the symptom rather
+	 * than the cause, which is a boot argument away.
+	 */
+	if (mm_idp->pid < 0)
+		printk(UM_KERN_ERR
+		       "%s : the stub is gone. If this happened at startup, the "
+		       "host refused to exec it from a memfd; pass "
+		       "stub_exe=<path to stub_exe> to run it from a file.\n",
+		       __func__);
+	else
+		printk(UM_KERN_ERR
+		       "%s : failed to wait for stub, pid = %d, errno = %d\n",
+		       __func__, mm_idp->pid, errno);
 	/* This is not true inside start_userspace */
 	if (current_mm_id() == mm_idp)
 		fatal_sigsegv();
@@ -438,15 +453,17 @@ __uml_setup("stub_exe=", uml_stub_exe_setup,
 "    Execute the stub from this file instead of from an anonymous memfd.\n"
 "\n"
 "    UML normally writes its embedded stub into a memfd and execs that, which\n"
-"    needs nothing from the filesystem. Android forbids it: an app process runs\n"
-"    in the untrusted_app SELinux domain under a W^X policy, where the only\n"
-"    place it may execute from is the native library directory unpacked from\n"
-"    its APK. Neither a memfd nor a file the app wrote itself is executable\n"
-"    there.\n"
+"    needs nothing from the filesystem. Android refuses that exec, and not\n"
+"    only inside an app: it was described here as a property of the\n"
+"    untrusted_app SELinux domain, but on Android 16 a plain adb shell fails\n"
+"    the same way, so treat it as the rule on that platform rather than as an\n"
+"    app sandbox restriction. Without this argument the guest dies before it\n"
+"    prints its version, because the stub is exec'd before anything else runs.\n"
 "\n"
-"    Point this at a copy of arch/um/kernel/skas/stub_exe shipped as one of\n"
-"    those libraries. The file must be exactly that stub: it is exec'd as the\n"
-"    userspace half of every guest address space.\n\n"
+"    Point this at a copy of arch/um/kernel/skas/stub_exe -- inside an app,\n"
+"    one shipped in the native library directory, which is the only place an\n"
+"    app may execute from. The file must be exactly that stub: it is exec'd as\n"
+"    the userspace half of every guest address space.\n\n"
 );
 
 static int __init init_stub_exe_fd(void)
@@ -641,8 +658,25 @@ int start_userspace(struct mm_id *mm_id)
 
 		if (!WIFSTOPPED(status) || (WSTOPSIG(status) != SIGSTOP)) {
 			err = -EINVAL;
-			printk(UM_KERN_ERR "%s : expected SIGSTOP, got status = %d\n",
-			       __func__, status);
+			/*
+			 * userspace_tramp() exits 5 on the line after its
+			 * execveat, so that status means the stub was never
+			 * executed -- and the raw number says none of that.
+			 * It is the ordinary failure on Android, where exec
+			 * from a memfd is refused, and the fix is a boot
+			 * argument the operator has no way to guess from
+			 * "expected SIGSTOP, got status = 1280".
+			 */
+			if (WIFEXITED(status) && WEXITSTATUS(status) == 5)
+				printk(UM_KERN_ERR
+				       "%s : could not exec the stub. The host "
+				       "refuses to execute it from a memfd; "
+				       "pass stub_exe=<path to stub_exe> to run "
+				       "it from a file instead.\n", __func__);
+			else
+				printk(UM_KERN_ERR
+				       "%s : expected SIGSTOP, got status = %d\n",
+				       __func__, status);
 			goto out_kill;
 		}
 
