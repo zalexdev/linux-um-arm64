@@ -35,8 +35,45 @@ KEEPMASK=${KEEPMASK:-40}
 ROUNDS=${ROUNDS:-7}
 OUT=${OUT:-$ROOT/artifacts/verifybench-$(date -u +%Y%m%dT%H%M%SZ)}
 
-# "label=path" per kernel, in the order they should appear.
-KERNELS=${KERNELS:?set KERNELS="label=/path/to/linux ..."}
+# Which interception modes to measure: "sec ptr" (default), or one of them.
+#
+# This is a correctness knob, not a convenience one. Every condition doubles the
+# wall time of a round, ptrace conditions are the slow ones (20us a syscall
+# against 2), and the run has to finish before the phone's thermal state moves
+# or the validator throws the whole table away -- which is exactly what happened
+# to two runs of three kernels x two modes: median compute 0.90ns with a 1.14ns
+# outlier, 27% jitter, INVALID. The same comparison with MODES=sec passes.
+#
+# So: name the modes the question actually needs. A prefault window sweep is a
+# seccomp question, and measuring ptrace alongside it does not make it more
+# rigorous -- it makes it unmeasurable.
+MODES=${MODES:-"sec ptr"}
+for m in $MODES; do
+	case "$m" in
+	sec|ptr) ;;
+	*) echo "verifybench: unknown mode '$m' (want sec and/or ptr)" >&2
+	   exit 2 ;;
+	esac
+done
+
+# "label=path" per kernel, in the order they should appear, and optionally
+# "label=path%extra boot args".
+#
+# The second form is what lets the *same binary* be a condition twice under
+# different command lines -- prefault=0 against the default, say, or a
+# seccomp_spin sweep. Those are the cheapest experiments available, because
+# they need no rebuild, and without this the harness could only compare
+# binaries: the command line was hardcoded in run_uml.
+#
+#   KERNELS="base=/path/linux pf0=/path/linux%prefault=0"
+#
+# % rather than : as the separator, because a path may contain a colon and a
+# boot argument certainly does (ubd0=...).
+KERNELS=${KERNELS:?set KERNELS="label=/path/to/linux[%extra args] ..."}
+
+# kernel_path/kernel_args - split one KERNELS entry
+kernel_path() { local v=${1#*=}; printf '%s' "${v%%\%*}"; }
+kernel_args() { local v=${1#*=}; case "$v" in *%*) printf '%s' "${v#*%}" ;; *) : ;; esac; }
 
 mkdir -p "$OUT"
 log() { printf '[verify] %s\n' "$*"; }
@@ -51,9 +88,10 @@ log() { printf '[verify] %s\n' "$*"; }
 	echo
 	echo "### kernels under test"
 	for k in $KERNELS; do
-		lbl=${k%%=*}; path=${k#*=}
+		lbl=${k%%=*}; path=$(kernel_path "$k")
 		echo "  $lbl"
 		echo "    path : $path"
+		echo "    args : $(kernel_args "$k")"
 		echo "    md5  : $(md5sum "$path" | cut -d' ' -f1)"
 		echo "    size : $(stat -c%s "$path")"
 		echo "    file : $(file -b "$path" | cut -c1-100)"
@@ -79,7 +117,7 @@ env_snapshot > "$OUT/env-before.txt"
 
 # ---- stage the kernels ------------------------------------------------------
 for k in $KERNELS; do
-	lbl=${k%%=*}; path=${k#*=}
+	lbl=${k%%=*}; path=$(kernel_path "$k")
 	adb push "$path" "$DEV/k-$lbl" >/dev/null 2>&1 || { echo "push failed: $path" >&2; exit 2; }
 done
 
@@ -94,16 +132,19 @@ run_proot() {
 	adb shell "cd $DEV && TMPDIR=$DEV PROOT_LOADER=$DEV/prt/libexec/loader \
 		LD_LIBRARY_PATH=$DEV/prt/lib taskset $MASK ./prt/proot -r alp /perfbench --quick 2>&1"
 }
+# run_uml <label> <seccomp on|off> [extra boot args]
 run_uml() {
 	adb shell "cd $DEV && HOME=$DEV TMPDIR=/tmp taskset $MASK timeout 300 ./k-$1 \
 		mem=512M panic=-1 con=null con0=null,fd:1 \
-		initrd=initramfs-perf.cpio.gz init=/init seccomp=$2 2>&1 | cat"
+		initrd=initramfs-perf.cpio.gz init=/init seccomp=$2 $3 2>&1 | cat"
 }
 
 CONDS="native proot"
 for k in $KERNELS; do
 	lbl=${k%%=*}
-	CONDS="$CONDS ${lbl}-sec ${lbl}-ptr"
+	for m in $MODES; do
+		CONDS="$CONDS ${lbl}-${m}"
+	done
 done
 echo "$CONDS" > "$OUT/conditions.txt"
 
@@ -112,9 +153,11 @@ for r in $(seq 1 "$ROUNDS"); do
 	run_native > "$OUT/native.$r" 2>&1
 	run_proot  > "$OUT/proot.$r"  2>&1
 	for k in $KERNELS; do
-		lbl=${k%%=*}
-		run_uml "$lbl" on  > "$OUT/${lbl}-sec.$r" 2>&1
-		run_uml "$lbl" off > "$OUT/${lbl}-ptr.$r" 2>&1
+		lbl=${k%%=*}; xargs=$(kernel_args "$k")
+		for m in $MODES; do
+			[ "$m" = sec ] && sc=on || sc=off
+			run_uml "$lbl" "$sc" "$xargs" > "$OUT/${lbl}-${m}.$r" 2>&1
+		done
 	done
 	sleep 3
 done

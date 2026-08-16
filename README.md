@@ -180,22 +180,49 @@ fails identically whether or not `CONFIG_VETH` is set — useless as a test.
 
 ## Benchmarks
 
-Measured on the Poco F3, `adb shell`, guest running `perfbench`. All three kernels
-are conditions **inside one interleaved run**, so a difference between them
-cannot be thermal drift or governor state.
+Measured on the Poco F3, `adb shell`, guest running `perfbench`. Every column of
+a table below is a condition **inside one interleaved run**, so a difference
+along a row cannot be thermal drift or governor state. Columns from different
+tables are from different runs and must not be compared with each other — that
+restriction is the whole point of the harness, not a formality.
 
-Medians of 7 interleaved rounds, µs/op:
+Medians of 7 interleaved rounds, µs/op, seccomp mode:
 
-| | native | proot | before | +waiter-bit | +fault-around |
+| | native | proot | 128K window | 512K window |
+|---|---|---|---|---|
+| syscall | 0.079 | 0.166 | 2.049 | **1.999** |
+| openat | 2.503 | 28.005 | 4.494 | **4.466** |
+| fault | 1.652 | 1.496 | 11.812 | **10.884** |
+| forkexec | 3196 | 516 | 1187 | **1177** |
+
+**The `fault` row is not one measurement.** `perfbench` steps by
+`sysconf(_SC_PAGESIZE)`, and this guest runs 16K pages against the host's 4K, so
+the native figure is per 4K page and the guest's is per 16K page — four times
+the memory for one number. Per byte the guest is **1.77×** the host on fresh
+anonymous memory, not the ~7× the column implies. The per-page reading of this
+row was believed here for a long time and sent a good deal of work chasing an
+overhead that was mostly a unit error; `harness/faultbench.c` reports per
+megabyte as well as per page so that it cannot happen again.
+
+The two guest columns are the same binary under two command lines, differing
+only in the fault-around window: 128K is what the default used to be (8 pages
+at 16K), 512K is what it is now (32, the top of the ramp). A separate run,
+seccomp only, takes the window apart — again all conditions inside that one run:
+
+| | native | proot | `prefault=0` | 8 pages | 32 pages |
 |---|---|---|---|---|---|
-| syscall | 0.080 | 0.168 | 9.841 | 1.995 | **1.987** |
-| openat | 2.527 | 27.393 | 20.223 | 4.473 | **4.501** |
-| fault | 1.456 | 1.418 | 24.592 | 18.897 | **11.076** |
-| forkexec | 3255 | 516 | 1197 | 1138 | **1137** |
+| fault | 1.540 | 1.504 | 19.076 | 11.791 | **10.913** |
 
-(`before`/`+waiter-bit`/`+fault-around` are seccomp mode. The ptrace column moved
-by ≤1% for the waiter-bit change, which is the check that the measurement follows
-the code and not the machine: that change touches only the seccomp path.)
+So having a window at all is worth 1.62×, and widening it from 8 pages to 32
+adds a further 8%. `syscall` (2.001 / 1.953 / 2.043) and `forkexec` (1144 / 1152
+/ 1144) do not move across those three, which is the check that the change
+reaches the fault path and nothing else.
+
+Earlier tables in this file's history carried `before` and `+waiter-bit`
+columns, from a run that no longer shares a machine state with anything above.
+They are not reproduced here rather than being pasted alongside newer numbers:
+the waiter-bit change took `syscall` from 9.841 to 1.995 µs and fault-around
+took `fault` from 18.897 to 11.076, both inside their own run.
 
 **Methodology**, because the numbers are worthless without it:
 
@@ -209,6 +236,12 @@ the code and not the machine: that change touches only the seccomp path.)
   If it disagrees across conditions by more than 5%, or jitters more than 8%
   within one, the whole table is thrown away and nothing is printed. Identical
   instruction streams cannot differ; if they do, the machine moved.
+- That validator earns its keep. The window sweep above was run twice before it
+  produced a table: three kernels × two interception modes is eight conditions,
+  long enough for the phone to move under it, and both attempts came back at
+  ~27% jitter and printed nothing. Naming only the mode the question needs
+  (`MODES=sec`) halved the run and it passed at 1.1%. A table that takes longer
+  to collect than the machine stays still is not a more thorough table.
 - `native` and `proot` are controls. proot is there because it is the real
   alternative on an unrooted phone, not because bare metal is.
 
