@@ -3,6 +3,21 @@
 config UML_ARM64
 	def_bool y
 	select ARCH_SUPPORTS_ATOMIC_RMW
+	#
+	# SMP. The subarch pieces it needs are already correct rather than
+	# merely untested: setjmp_aarch64.S saves the AAPCS64 callee-saved set
+	# and nothing thread-local, so a switch_buf built on one CPU thread is
+	# safe to longjmp from another; barrier.h gives real dmb ish rather
+	# than UP stubs; and the two pieces of per-thread state a shared stub
+	# would otherwise lose -- TPIDR_EL0 as its own regset, and the
+	# in-flight syscall number via NT_ARM_SYSTEM_CALL -- are carried in
+	# os-Linux/registers.c.
+	#
+	# NR_CPUS is only a ceiling: the count that is actually brought up is
+	# the ncpus= boot argument, clamped to it. So one binary serves any
+	# host, and a host that cannot do SMP at all (ptrace userspace) boots
+	# on one CPU rather than refusing to boot.
+	select UML_SUBARCH_SUPPORTS_SMP
 	select ARCH_USE_QUEUED_RWLOCKS
 	select ARCH_USE_QUEUED_SPINLOCKS
 	select HAVE_EFFICIENT_UNALIGNED_ACCESS
