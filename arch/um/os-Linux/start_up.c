@@ -999,11 +999,17 @@ void __init os_early_checks(void)
 	 * One binary then scales to whatever each host allows, and a host that
 	 * only has ptrace gets a slower boot instead of no boot.
 	 */
-	if (uml_ncpus > 1) {
+	/*
+	 * Guarded because uml_ncpus is not a variable on a uniprocessor build:
+	 * arch/um/include/shared/smp.h defines it as the constant 1 there, so
+	 * the assignment below does not compile at all. Nothing to clamp in
+	 * that configuration anyway.
+	 */
+	if (IS_ENABLED(CONFIG_SMP) && uml_ncpus > 1) {
 		os_info("SMP is not supported with ptrace userspace; "
 			"running on 1 CPU instead of the %d requested\n",
 			uml_ncpus);
-		uml_ncpus = 1;
+		um_ncpus_force_up();
 	}
 
 	using_seccomp = 0;
