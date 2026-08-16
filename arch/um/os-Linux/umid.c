@@ -413,6 +413,27 @@ static void remove_umid_dir(void)
 {
 	char *dir, err;
 
+	/*
+	 * make_uml_dir() leaves uml_dir NULL when it could not create the
+	 * directory, and this is an exitcall: it runs on every shutdown
+	 * whatever happened at boot. Without this check the strlen() below
+	 * faults at address zero and the kernel panics as it halts --
+	 *
+	 *	Kernel panic - not syncing: Kernel mode fault at addr 0x0
+	 *	 [<...>] do_uml_exitcalls
+	 *
+	 * -- with the backtrace pointing at the exitcall loop and nothing at
+	 * the directory that was never made. Every other user of uml_dir is
+	 * downstream of a make_umid() that has already returned an error, so
+	 * this is the only one that has to look.
+	 *
+	 * It is the ordinary case, not a corner: the default uml_dir sits
+	 * under $HOME, and a bare shell with no writable home is exactly how
+	 * someone runs this the first time.
+	 */
+	if (uml_dir == NULL)
+		return;
+
 	dir = malloc(strlen(uml_dir) + UMID_LEN + 1);
 	if (!dir)
 		return;
