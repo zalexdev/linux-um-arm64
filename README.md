@@ -57,10 +57,17 @@ reading it, and all fixed on this branch:
 
 Tested on:
 
-- **Xiaomi Mi 11** (Snapdragon 888), Android 15, host kernel `4.19.246`, 4 KB pages.
-  That host has no `PTRACE_SYSEMU` — arm64 gained it in 5.3 — which is why the
-  cancellation and substitution paths exist and are exercised daily rather than
-  theoretically.
+- **Poco F3** (`M2012K11AG`/`alioth`, Snapdragon 870 / SM8250), Android 15, host
+  kernel `4.19.246`, 4 KB pages, Armv8.2. That host has no `PTRACE_SYSEMU` —
+  arm64 gained it in 5.3 — which is why the cancellation and substitution paths
+  exist and are exercised daily rather than theoretically. It also has neither
+  pointer authentication nor SVE, so it says nothing about either.
+- **Galaxy S26 Ultra** (`SM-S948B`/`m3q`), Android 16, host kernel `6.12.30`,
+  4 KB pages, Armv9 with SVE and pointer authentication. The opposite end: a
+  current host where `PTRACE_SYSEMU` is present and the CPU implements the
+  features the older phone lacks. Two of the three bugs above were invisible on
+  the Poco and immediate here — the PAC one is fatal on this CPU and a NOP on
+  that one — so the pair is the point rather than either device.
 - An **arm64 Debian run domain** for the gates.
 
 Both interception fallbacks can be forced anywhere with `nosysemu` and
@@ -173,7 +180,7 @@ fails identically whether or not `CONFIG_VETH` is set — useless as a test.
 
 ## Benchmarks
 
-Measured on the Mi 11, `adb shell`, guest running `perfbench`. All three kernels
+Measured on the Poco F3, `adb shell`, guest running `perfbench`. All three kernels
 are conditions **inside one interleaved run**, so a difference between them
 cannot be thermal drift or governor state.
 
