@@ -986,8 +986,25 @@ void __init os_early_checks(void)
 			fatal("SECCOMP userspace requested but not functional!\n");
 	}
 
-	if (uml_ncpus > 1)
-		fatal("SMP is not supported with PTRACE userspace.\n");
+	/*
+	 * ptrace cannot drive more than one CPU thread, but that is a reason to
+	 * bring up one CPU rather than to refuse to boot. Dying here makes the
+	 * CPU count a property of the host: the same command line that works on
+	 * a host with seccomp kills the kernel on one without, before even
+	 * "Linux version" is printed, and the operator has to know which kind of
+	 * host they have before they can pick a number.
+	 *
+	 * Treat ncpus= as a request for an upper bound, which is what it already
+	 * is against NR_CPUS -- uml_ncpus_setup() clamps it there the same way.
+	 * One binary then scales to whatever each host allows, and a host that
+	 * only has ptrace gets a slower boot instead of no boot.
+	 */
+	if (uml_ncpus > 1) {
+		os_info("SMP is not supported with ptrace userspace; "
+			"running on 1 CPU instead of the %d requested\n",
+			uml_ncpus);
+		uml_ncpus = 1;
+	}
 
 	using_seccomp = 0;
 	os_info("Userspace mode: ptrace\n");
