@@ -15,10 +15,25 @@
 # BPF_FUNC_kernel_snprintf and CONFIG_BPF_SYSCALL will not build. objcopy
 # renames definitions and references together and cannot make that mistake.
 #
+# This file is no longer the whole answer. scripts/link-vmlinux.sh computes the
+# same intersection against the libc actually being linked and adds whatever it
+# finds that is not already here, because the set depends on the libc and not on
+# this tree: NDK r27c's bionic has no sched_setattr, newer ones do, and a list
+# fixed at the version I happened to build with shipped
+#
+#	ld.lld: error: duplicate symbol: sched_setattr
+#	ld.lld: error: duplicate symbol: sync_file_range
+#
+# to anyone using a different NDK. What remains here is the explanation, and the
+# fallback for a build where nm or libc.a cannot be found.
+#
 # Derived, not guessed:
 #   llvm-nm --undefined-only libc.a                > A
 #   llvm-nm --defined-only --extern-only vmlinux.a > B
 #   comm -12 A B
+#
+# and the same again with --defined-only on both sides, which is the set that
+# fails loudly as a duplicate symbol rather than quietly as a bad binding.
 snprintf kernel_snprintf
 vsnprintf kernel_vsnprintf
 sprintf kernel_sprintf
@@ -40,3 +55,14 @@ strlcat kernel_strlcat
 strpbrk kernel_strpbrk
 strsep kernel_strsep
 strstr kernel_strstr
+
+# Defined by both sides, so these are the ones that stop the link outright.
+# A rename for a name the kernel does not define is a no-op, so listing one
+# that a given config leaves out costs nothing.
+bsearch kernel_bsearch
+strcat kernel_strcat
+strncat kernel_strncat
+strspn kernel_strspn
+sync_file_range kernel_sync_file_range
+sched_setattr kernel_sched_setattr
+sched_getattr kernel_sched_getattr

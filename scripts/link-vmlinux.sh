@@ -78,22 +78,78 @@ vmlinux_link()
 	objs="${objs} init/version-timestamp.o"
 
 	if [ "${SRCARCH}" = "um" ]; then
-		# Rename the kernel symbols that the target libc also references,
+		# Rename the kernel symbols that the target libc also uses,
 		# before it gets a chance to bind to them. Doing it here rather
 		# than with -D during compilation keeps the preprocessor out of
 		# it: these names also occur as bare tokens that other headers
 		# paste into identifiers, and rewriting those breaks builds in
 		# places that have nothing to do with libc. See the list itself
 		# for which names and why.
-		if [ -n "${UM_REDEF_SYMS}" ] && [ -f "${UM_REDEF_SYMS}" ]; then
-			for a in ${objs} ${libs}; do
-				case "${a}" in
-				*.a|*.o)
-					${OBJCOPY} --redefine-syms="${UM_REDEF_SYMS}" \
-						"${a}" || exit 1
-					;;
-				esac
-			done
+		#
+		# The list is derived here rather than only read from the file,
+		# because which names collide is a property of the libc being
+		# linked against and not of this tree. NDK r27c's bionic has no
+		# sched_setattr, newer ones do, so a build that worked shipped
+		# a link failure to anyone on a different NDK:
+		#
+		#	ld.lld: error: duplicate symbol: sched_setattr
+		#	ld.lld: error: duplicate symbol: sync_file_range
+		#
+		# Deriving it means a new libc adds a rename instead of a bug
+		# report. The checked-in file stays as the explanation and as
+		# the fallback when nm or libc.a cannot be found.
+		#
+		# Both halves matter and they fail differently. A name libc
+		# DEFINES is a duplicate-symbol error, loud and immediate. A
+		# name libc only REFERENCES silently binds to the kernel's
+		# definition -- that was sched_getaffinity, where bionic's
+		# startup called into the kernel's implementation and touched a
+		# task_struct that does not exist yet, for a SIGSEGV before
+		# main() with no output at all.
+		if [ -n "${UM_REDEF_SYMS}" ]; then
+			um_redef=.tmp_um_redef_syms
+			: > "${um_redef}"
+			if [ -f "${UM_REDEF_SYMS}" ]; then
+				sed -e 's/#.*//' -e '/^[[:space:]]*$/d' \
+					"${UM_REDEF_SYMS}" > "${um_redef}"
+			fi
+
+			um_libc=$(${CC} ${KBUILD_CFLAGS} -print-file-name=libc.a \
+				  2>/dev/null)
+			if [ -n "${NM}" ] && [ -f "${um_libc}" ]; then
+				# Anything the kernel defines...
+				${NM} --defined-only --extern-only \
+					${objs} ${libs} 2>/dev/null |
+					awk '$2 ~ /^[TWDBR]$/ { print $3 }' |
+					sort -u > .tmp_um_kdef
+				# ...that libc defines or references. Undefined
+				# entries print as "U name", defined ones as
+				# "addr T name"; archive member headers end in
+				# ':' and match neither.
+				${NM} "${um_libc}" 2>/dev/null |
+					awk '$1 == "U" { print $2 }
+					     $2 ~ /^[TWDBR]$/ { print $3 }' |
+					sort -u > .tmp_um_libc
+				comm -12 .tmp_um_kdef .tmp_um_libc |
+				while read -r sym; do
+					grep -q "^${sym}[[:space:]]" \
+						"${um_redef}" && continue
+					echo "${sym} kernel_${sym}"
+				done >> "${um_redef}"
+				rm -f .tmp_um_kdef .tmp_um_libc
+			fi
+
+			if [ -s "${um_redef}" ]; then
+				for a in ${objs} ${libs}; do
+					case "${a}" in
+					*.a|*.o)
+						${OBJCOPY} \
+						  --redefine-syms="${um_redef}" \
+						  "${a}" || exit 1
+						;;
+					esac
+				done
+			fi
 		fi
 
 		wl=-Wl,
